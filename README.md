@@ -1,5 +1,5 @@
 [![Project Status: WIP – Initial development is in progress, but there has not yet been a stable, usable release suitable for the public.](https://www.repostatus.org/badges/latest/wip.svg)](https://www.repostatus.org/#wip)
-# 👁️ Aksi
+# Aksi 👁️ 
 
 Aksi is a high-performance, Python-based Model Context Protocol (MCP) server designed to bridge the gap between complex codebases and human/AI comprehension. It utilizes static analysis to generate a hierarchical, zoomable "Cognitive Map" of any project without relying on expensive LLM tokens for structural discovery.
 
