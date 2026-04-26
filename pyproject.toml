@@ -1,29 +1,10 @@
 [project]
 name = "aksi"
 version = "0.1.0"
-description = "A high-performance, multi-language codebase navigator for MCP hosts."
-readme = "README.md"
+description = "A local codebase navigator that builds static-analysis architecture maps."
 requires-python = ">=3.12"
 dependencies = [
   "tree-sitter>=0.22",
   "tree-sitter-languages>=1.10",
+  "fastmcp>=2.0",
 ]
-
-[project.optional-dependencies]
-mcp = ["fastmcp>=2.0"]
-sync = ["watchdog>=4.0"]
-dev = ["pytest>=8.0"]
-
-[project.scripts]
-aksi-scan = "aksi.scan:main"
-aksi-build = "aksi.build:main"
-aksi-mcp = "aksi.mcp_server:main"
-aksi-view = "aksi.visualizer:main"
-aksi-sync = "aksi.sync:main"
-aksi-bundle = "aksi.bundle:main"
-
-[tool.pytest.ini_options]
-testpaths = ["tests"]
-
-[tool.setuptools.packages.find]
-include = ["aksi*"]
