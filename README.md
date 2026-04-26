@@ -35,20 +35,23 @@ Files/
     └── index.html      <-- Main zoomable visualization entry point
 ```
 
-## Current Phase: 2 - Relational Engine
+## Current Phase: 3 - MCP Interface
 
 The scanner walks a repository and writes `Files/symbols.json` with per-file hashes,
 imports, exports, class names, function signatures, and docstrings. The relational
 engine then writes `Files/index.json` with a project/folder/file/symbol hierarchy
-and import edges resolved against in-repo definitions.
+and import edges resolved against in-repo definitions. The MCP interface exposes
+that map through `scan_repo`, `search_symbols`, and `get_context`.
 
 ```bash
 python3 scripts/verify_phase1.py
 python3 scripts/verify_phase2.py
+python3 scripts/verify_phase3.py
 ```
 
 For ad-hoc builds:
 
 ```bash
 python3 -m aksi.build /path/to/repo --symbols-out Files/symbols.json --graph-out Files/index.json
+python3 -m aksi.mcp_server
 ```
