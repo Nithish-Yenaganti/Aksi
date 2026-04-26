@@ -35,18 +35,23 @@ Files/
     └── index.html      <-- Main zoomable visualization entry point
 ```
 
-## Current Phase: 3 - MCP Interface
+## Current Phase: 5 - Sync & Artifact Layer
 
 The scanner walks a repository and writes `Files/symbols.json` with per-file hashes,
 imports, exports, class names, function signatures, and docstrings. The relational
 engine then writes `Files/index.json` with a project/folder/file/symbol hierarchy
 and import edges resolved against in-repo definitions. The MCP interface exposes
-that map through `scan_repo`, `search_symbols`, and `get_context`.
+that map through `scan_repo`, `search_symbols`, and `get_context`. The ZUI renders
+`Files/index.json` as a D3 zoomable box-in-box map served from localhost. The sync
+layer refreshes stale hash flags, writes a shelve metadata cache, and exports a
+standalone `Files/aksi_bundle.html` artifact.
 
 ```bash
 python3 scripts/verify_phase1.py
 python3 scripts/verify_phase2.py
 python3 scripts/verify_phase3.py
+python3 scripts/verify_phase4.py
+python3 scripts/verify_phase5.py
 ```
 
 For ad-hoc builds:
@@ -54,4 +59,7 @@ For ad-hoc builds:
 ```bash
 python3 -m aksi.build /path/to/repo --symbols-out Files/symbols.json --graph-out Files/index.json
 python3 -m aksi.mcp_server
+python3 -m aksi.visualizer --dir Files --port 8765
+python3 -m aksi.sync --symbols Files/symbols.json --graph Files/index.json
+python3 -m aksi.bundle /path/to/repo --out Files
 ```

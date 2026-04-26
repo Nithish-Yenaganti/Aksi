@@ -11,12 +11,16 @@ dependencies = [
 
 [project.optional-dependencies]
 mcp = ["fastmcp>=2.0"]
+sync = ["watchdog>=4.0"]
 dev = ["pytest>=8.0"]
 
 [project.scripts]
 aksi-scan = "aksi.scan:main"
 aksi-build = "aksi.build:main"
 aksi-mcp = "aksi.mcp_server:main"
+aksi-view = "aksi.visualizer:main"
+aksi-sync = "aksi.sync:main"
+aksi-bundle = "aksi.bundle:main"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
