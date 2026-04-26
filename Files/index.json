@@ -1,0 +1,196 @@
+{
+  "edges": [
+    {
+      "import_module": "web.message",
+      "import_name": "buildMessage",
+      "kind": "imports",
+      "line": 3,
+      "source": "file:src/greeter.py",
+      "source_path": "src/greeter.py",
+      "target": "symbol:web/message.js:buildMessage",
+      "target_path": "web/message.js"
+    },
+    {
+      "import_module": "../src/greeter.py",
+      "import_name": "{ DEFAULT_NAME }",
+      "kind": "imports",
+      "line": 1,
+      "source": "file:web/message.js",
+      "source_path": "web/message.js",
+      "target": "symbol:src/greeter.py:DEFAULT_NAME",
+      "target_path": "src/greeter.py"
+    }
+  ],
+  "generated_at": "2026-04-26T08:08:07.222511+00:00",
+  "root": "/Users/sunny/Documents/Aksi/tests/fixtures/polyglot",
+  "tree": {
+    "children": [
+      {
+        "children": [
+          {
+            "children": [
+              {
+                "children": [],
+                "docstring": null,
+                "end_line": 5,
+                "id": "symbol:src/greeter.py:DEFAULT_NAME",
+                "kind": "symbol",
+                "language": null,
+                "name": "DEFAULT_NAME",
+                "path": "src/greeter.py",
+                "sha256": null,
+                "signature": null,
+                "stale": false,
+                "start_line": 5,
+                "symbol_kind": "constant"
+              },
+              {
+                "children": [],
+                "docstring": "Formats greeting text.",
+                "end_line": 13,
+                "id": "symbol:src/greeter.py:Greeter",
+                "kind": "symbol",
+                "language": null,
+                "name": "Greeter",
+                "path": "src/greeter.py",
+                "sha256": null,
+                "signature": "class Greeter",
+                "stale": false,
+                "start_line": 8,
+                "symbol_kind": "class"
+              },
+              {
+                "children": [],
+                "docstring": "Return a friendly greeting.",
+                "end_line": 13,
+                "id": "symbol:src/greeter.py:Greeter.greet",
+                "kind": "symbol",
+                "language": null,
+                "name": "Greeter.greet",
+                "path": "src/greeter.py",
+                "sha256": null,
+                "signature": "def greet(self, name: str=DEFAULT_NAME)",
+                "stale": false,
+                "start_line": 11,
+                "symbol_kind": "method"
+              },
+              {
+                "children": [],
+                "docstring": "Return the default greeting.",
+                "end_line": 18,
+                "id": "symbol:src/greeter.py:greet_default",
+                "kind": "symbol",
+                "language": null,
+                "name": "greet_default",
+                "path": "src/greeter.py",
+                "sha256": null,
+                "signature": "def greet_default()",
+                "stale": false,
+                "start_line": 16,
+                "symbol_kind": "function"
+              }
+            ],
+            "docstring": null,
+            "end_line": null,
+            "id": "file:src/greeter.py",
+            "kind": "file",
+            "language": "python",
+            "name": "greeter.py",
+            "path": "src/greeter.py",
+            "sha256": "02b1064a75b6a6dd2b714d316dc47b1cebe77f56b47f1be3cd72ad7b41bc6968",
+            "signature": null,
+            "stale": false,
+            "start_line": null,
+            "symbol_kind": null
+          }
+        ],
+        "docstring": null,
+        "end_line": null,
+        "id": "folder:src",
+        "kind": "folder",
+        "language": null,
+        "name": "src",
+        "path": "src",
+        "sha256": null,
+        "signature": null,
+        "stale": false,
+        "start_line": null,
+        "symbol_kind": null
+      },
+      {
+        "children": [
+          {
+            "children": [
+              {
+                "children": [],
+                "docstring": null,
+                "end_line": null,
+                "id": "symbol:web/message.js:MessageView",
+                "kind": "symbol",
+                "language": null,
+                "name": "MessageView",
+                "path": "web/message.js",
+                "sha256": null,
+                "signature": "class MessageView",
+                "stale": false,
+                "start_line": 9,
+                "symbol_kind": "class"
+              },
+              {
+                "children": [],
+                "docstring": "Build a greeting message for display.",
+                "end_line": null,
+                "id": "symbol:web/message.js:buildMessage",
+                "kind": "symbol",
+                "language": null,
+                "name": "buildMessage",
+                "path": "web/message.js",
+                "sha256": null,
+                "signature": "function buildMessage(name = DEFAULT_NAME)",
+                "stale": false,
+                "start_line": 6,
+                "symbol_kind": "function"
+              }
+            ],
+            "docstring": null,
+            "end_line": null,
+            "id": "file:web/message.js",
+            "kind": "file",
+            "language": "javascript",
+            "name": "message.js",
+            "path": "web/message.js",
+            "sha256": "44757033107b1acc6c24db68d4673d3da816f4666161ec0a4825d4d5499cfb3b",
+            "signature": null,
+            "stale": false,
+            "start_line": null,
+            "symbol_kind": null
+          }
+        ],
+        "docstring": null,
+        "end_line": null,
+        "id": "folder:web",
+        "kind": "folder",
+        "language": null,
+        "name": "web",
+        "path": "web",
+        "sha256": null,
+        "signature": null,
+        "stale": false,
+        "start_line": null,
+        "symbol_kind": null
+      }
+    ],
+    "docstring": null,
+    "end_line": null,
+    "id": "project:",
+    "kind": "project",
+    "language": null,
+    "name": "polyglot",
+    "path": "",
+    "sha256": null,
+    "signature": null,
+    "stale": false,
+    "start_line": null,
+    "symbol_kind": null
+  }
+}

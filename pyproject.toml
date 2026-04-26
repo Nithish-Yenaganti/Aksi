@@ -1,0 +1,21 @@
+[project]
+name = "aksi"
+version = "0.1.0"
+description = "A high-performance, multi-language codebase navigator for MCP hosts."
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+  "tree-sitter>=0.22",
+  "tree-sitter-languages>=1.10",
+]
+
+[project.optional-dependencies]
+mcp = ["fastmcp>=2.0"]
+dev = ["pytest>=8.0"]
+
+[project.scripts]
+aksi-scan = "aksi.scan:main"
+aksi-build = "aksi.build:main"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

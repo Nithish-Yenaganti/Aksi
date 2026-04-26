@@ -33,3 +33,22 @@ Files/
 ├── symbols.json        <-- Searchable symbol registry
 └── graph/              
     └── index.html      <-- Main zoomable visualization entry point
+```
+
+## Current Phase: 2 - Relational Engine
+
+The scanner walks a repository and writes `Files/symbols.json` with per-file hashes,
+imports, exports, class names, function signatures, and docstrings. The relational
+engine then writes `Files/index.json` with a project/folder/file/symbol hierarchy
+and import edges resolved against in-repo definitions.
+
+```bash
+python3 scripts/verify_phase1.py
+python3 scripts/verify_phase2.py
+```
+
+For ad-hoc builds:
+
+```bash
+python3 -m aksi.build /path/to/repo --symbols-out Files/symbols.json --graph-out Files/index.json
+```
