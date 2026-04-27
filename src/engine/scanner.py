@@ -12,6 +12,8 @@ from hashlib import sha256
 from pathlib import Path
 from typing import Protocol
 
+from src.engine.io import write_json_atomic
+
 SUPPORTED_EXTENSIONS = {
     ".py": "python",
     ".js": "javascript",
@@ -216,8 +218,7 @@ def scan_repo(root: Path, output_path: Path | None = None, *, require_tree_sitte
 
 
 def write_symbols(index: SymbolIndex, output_path: Path) -> None:
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    output_path.write_text(json.dumps(index.to_dict(), indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    write_json_atomic(output_path, index.to_dict())
 
 
 def file_sha256(path: Path) -> str:

@@ -3,12 +3,12 @@
 from __future__ import annotations
 
 import argparse
-import json
 import time
 from pathlib import Path
 from typing import Any
 
 from src.engine.scanner import file_sha256
+from src.engine.io import read_json, write_json_atomic
 
 
 def refresh_stale_state(symbols_path: Path = Path("Files/symbols.json"), graph_path: Path = Path("Files/graph.json")) -> dict[str, Any]:
@@ -90,12 +90,11 @@ def _mark_graph_stale(node: dict[str, Any], stale_by_path: dict[str, bool]) -> b
 
 
 def _read_json(path: Path) -> dict[str, Any]:
-    return json.loads(path.read_text(encoding="utf-8"))
+    return read_json(path)
 
 
 def _write_json(path: Path, payload: dict[str, Any]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    write_json_atomic(path, payload)
 
 
 def build_parser() -> argparse.ArgumentParser:

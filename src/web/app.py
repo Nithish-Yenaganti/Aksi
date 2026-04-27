@@ -4,10 +4,11 @@ from __future__ import annotations
 
 import argparse
 import functools
-import json
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
+
+from src.engine.io import read_json
 
 DEFAULT_FILES_DIR = Path("Files")
 DEFAULT_STATIC_DIR = Path("src/web/static")
@@ -31,7 +32,7 @@ def create_app(files_dir: Path = DEFAULT_FILES_DIR, static_dir: Path = DEFAULT_S
 
     @app.get("/graph.json")
     def graph() -> JSONResponse:
-        return JSONResponse(json.loads((files_dir / "graph.json").read_text(encoding="utf-8")))
+        return JSONResponse(read_json(files_dir / "graph.json"))
 
     app.mount("/static", StaticFiles(directory=static_dir), name="static")
     return app

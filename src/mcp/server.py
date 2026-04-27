@@ -3,11 +3,11 @@
 from __future__ import annotations
 
 import argparse
-import json
 from pathlib import Path
 from typing import Any
 
 from src.engine.graph import build_graph
+from src.engine.io import read_json
 from src.engine.scanner import file_sha256, scan_repo as run_scanner
 
 DEFAULT_OUTPUT_DIR = Path("Files")
@@ -127,9 +127,7 @@ def create_server() -> Any:
 
 
 def _read_json(path: Path) -> dict[str, Any]:
-    if not path.exists():
-        raise FileNotFoundError(f"Missing Aksi artifact: {path}")
-    return json.loads(path.read_text(encoding="utf-8"))
+    return read_json(path)
 
 
 def _safe_repo_path(repo: Path, path: str) -> Path:

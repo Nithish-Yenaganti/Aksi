@@ -3,11 +3,12 @@
 from __future__ import annotations
 
 import argparse
-import json
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
 from typing import Any
+
+from src.engine.io import read_json, write_json_atomic
 
 
 @dataclass(frozen=True)
@@ -58,7 +59,7 @@ def build_graph_from_symbols(symbols: dict[str, Any]) -> ArchitectureGraph:
 
 
 def build_graph(symbols_path: Path, output_path: Path | None = None) -> ArchitectureGraph:
-    symbols = json.loads(symbols_path.read_text(encoding="utf-8"))
+    symbols = read_json(symbols_path)
     graph = build_graph_from_symbols(symbols)
     if output_path is not None:
         write_graph(graph, output_path)
@@ -66,8 +67,7 @@ def build_graph(symbols_path: Path, output_path: Path | None = None) -> Architec
 
 
 def write_graph(graph: ArchitectureGraph, output_path: Path) -> None:
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    output_path.write_text(json.dumps(graph.to_dict(), indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    write_json_atomic(output_path, graph.to_dict())
 
 
 def _build_tree(root: str, file_nodes: dict[str, GraphNode]) -> GraphNode:
