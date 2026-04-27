@@ -19,6 +19,7 @@ class GraphNode:
     language: str | None = None
     sha256: str | None = None
     line: int | None = None
+    stale: bool = False
     children: list["GraphNode"] = field(default_factory=list)
 
 
@@ -96,7 +97,8 @@ def _file_node(file: dict[str, Any]) -> GraphNode:
                 name=str(class_record["name"]),
                 kind="class",
                 path=str(file["path"]),
-                line=class_record.get("line"),
+        line=class_record.get("line"),
+                stale=bool(file.get("stale", False)),
             )
         )
     for function_record in file.get("functions", []):
@@ -106,7 +108,8 @@ def _file_node(file: dict[str, Any]) -> GraphNode:
                 name=str(function_record["name"]),
                 kind="function",
                 path=str(file["path"]),
-                line=function_record.get("line"),
+        line=function_record.get("line"),
+                stale=bool(file.get("stale", False)),
             )
         )
     return GraphNode(
@@ -116,6 +119,7 @@ def _file_node(file: dict[str, Any]) -> GraphNode:
         path=str(file["path"]),
         language=str(file["language"]),
         sha256=str(file["sha256"]),
+        stale=bool(file.get("stale", False)),
         children=children,
     )
 
@@ -236,6 +240,7 @@ def _freeze_node(node: GraphNode) -> GraphNode:
         language=node.language,
         sha256=node.sha256,
         line=node.line,
+        stale=node.stale or any(child.stale for child in node.children),
         children=[_freeze_node(child) for child in node.children],
     )
 
