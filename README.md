@@ -86,7 +86,13 @@ Normal MCP workflow:
 
 ## View the Map
 
-After scanning, serve the repository directory and open the UI:
+The one-command runner already scans and serves the UI:
+
+```bash
+python aksi.py
+```
+
+For manual static serving after a scan, serve the repository directory and open the UI:
 
 ```bash
 python -m http.server 8000
@@ -98,7 +104,7 @@ Then open:
 http://localhost:8000/ui/
 ```
 
-The viewer loads `../Files/architecture.json`, draws nested repo/folder/file/symbol boxes, highlights imports on click, and marks stale files when the map says they changed.
+The viewer loads `../Files/architecture.json`, draws the Structure and Runtime Flow diagrams, and shows saved LLM summaries from `Files/context/index.json` when they exist.
 
 ## Development
 
@@ -109,7 +115,7 @@ pytest
 Useful smoke checks:
 
 ```bash
-python scanner.py .
-python graph.py .
-python -m py_compile scanner.py graph.py mcp_server.py
+python aksi.py --scan-only
+python aksi.py --test
+python -m py_compile aksi.py scanner.py graph.py mcp_server.py
 ```
