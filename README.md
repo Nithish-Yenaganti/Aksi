@@ -29,6 +29,24 @@ The scanner automatically uses `tree-sitter-languages` when it is available. Wit
 
 ## Scan a Repository
 
+The easiest way to run Aksi is:
+
+```bash
+python aksi.py
+```
+
+That single command scans the current repo, writes `Files/architecture.json`, starts a local static server, and prints the UI URL.
+
+Common shortcuts:
+
+```bash
+python aksi.py --scan-only
+python aksi.py --test
+python aksi.py /path/to/repo --port 8080
+```
+
+The lower-level graph command is still available:
+
 ```bash
 python graph.py /path/to/repo
 ```

@@ -11,6 +11,7 @@ Agents working in this repo should preserve the core idea: structural truth come
 - `scanner.py` scans repositories, extracts symbols/imports, computes file hashes, and writes cache data under `Files/`.
 - `graph.py` converts scanner output into `Files/architecture.json`.
 - `mcp_server.py` exposes `scan_repo`, `get_map`, and `get_context` through FastMCP stdio.
+- `aksi.py` is the one-command local runner for scanning, testing, and launching the static UI.
 - `ui/index.html` renders the generated architecture map with D3.
 - `tests/` contains pytest coverage for scanner, graph, and MCP helper behavior.
 
@@ -26,6 +27,7 @@ Agents working in this repo should preserve the core idea: structural truth come
   - `python scanner.py /path/to/repo`
   - `python graph.py /path/to/repo`
   - `python mcp_server.py`
+  - `python aksi.py`
   - MCP tools: `scan_repo`, `get_map`, `get_context`
 
 ## Testing
@@ -40,7 +42,7 @@ For quick smoke checks, also use:
 
 ```bash
 .venv/bin/python -m py_compile scanner.py graph.py mcp_server.py
-.venv/bin/python graph.py .
+.venv/bin/python aksi.py --scan-only
 ```
 
 If dependencies are missing, install the project in editable mode:

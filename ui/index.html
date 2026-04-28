@@ -8,16 +8,16 @@
   <style>
     :root {
       color-scheme: dark;
-      --bg: #0b0f14;
-      --panel: #111821;
+      --bg: #201d31;
+      --panel: #141222;
       --ink: #e8eef6;
-      --muted: #8ea0b5;
-      --line: #2f80ed;
+      --muted: #b7b0c9;
+      --line: #6d57d9;
       --stale: #ffb020;
-      --file: #284a63;
-      --folder: #1c3448;
-      --symbol: #477b58;
-      --external: #5d4a2f;
+      --file: #151326;
+      --folder: #151326;
+      --symbol: #151326;
+      --external: #151326;
     }
 
     * { box-sizing: border-box; }
@@ -25,9 +25,12 @@
     body {
       margin: 0;
       overflow: hidden;
-      background: var(--bg);
+      background:
+        radial-gradient(circle at 18% 20%, rgba(86, 73, 156, 0.16), transparent 32%),
+        radial-gradient(circle at 82% 76%, rgba(78, 66, 137, 0.14), transparent 36%),
+        var(--bg);
       color: var(--ink);
-      font: 13px/1.4 ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      font: 16px/1.35 ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
     }
 
     #toolbar {
@@ -59,6 +62,30 @@
     #meta {
       color: var(--muted);
       white-space: nowrap;
+    }
+
+    #viewModes {
+      display: flex;
+      gap: 4px;
+      padding: 4px;
+    }
+
+    #viewModes button {
+      appearance: none;
+      border: 1px solid transparent;
+      border-radius: 6px;
+      background: transparent;
+      color: var(--muted);
+      cursor: pointer;
+      font: inherit;
+      font-size: 12px;
+      padding: 6px 9px;
+    }
+
+    #viewModes button.active {
+      border-color: #5f5480;
+      background: #221f36;
+      color: var(--ink);
     }
 
     #details {
@@ -94,13 +121,14 @@
     }
 
     .node rect {
-      stroke: #5d7188;
-      stroke-width: 1;
-      fill-opacity: 0.42;
+      stroke: #4b4564;
+      stroke-width: 1.15;
+      fill-opacity: 0.96;
       cursor: pointer;
+      filter: drop-shadow(0 0 9px rgba(205, 198, 232, 0.24));
     }
 
-    .node.repo rect { fill: #101924; stroke: #7890aa; }
+    .node.repo rect { fill: #171529; stroke: #8377b5; }
     .node.folder rect { fill: var(--folder); }
     .node.file rect { fill: var(--file); }
     .node.function rect,
@@ -109,34 +137,60 @@
     .node.struct rect,
     .node.type rect { fill: var(--symbol); }
     .node.external rect { fill: var(--external); stroke-dasharray: 4 3; }
+    .node.input rect { fill: #1d1730; stroke: #8f82d8; }
+    .node.process rect { fill: #151326; stroke: #7068a4; }
+    .node.artifact rect { fill: #162437; stroke: #63b8e8; }
+    .node.consumer rect { fill: #173027; stroke: #55c9a2; }
     .node.stale rect { stroke: var(--stale); stroke-width: 2.5; }
-    .node.selected rect { stroke: #b8e0ff; stroke-width: 3; }
-    .node.connected rect { stroke: var(--line); stroke-width: 2.5; }
+    .node.selected rect { stroke: #f4efff; stroke-width: 3; }
+    .node.connected rect { stroke: #8d7cff; stroke-width: 2.5; }
 
     .label {
       fill: var(--ink);
       pointer-events: none;
-      dominant-baseline: hanging;
-      font-size: 12px;
+      text-anchor: middle;
+      font-size: 16px;
+      font-weight: 500;
+      letter-spacing: 0;
     }
 
-    .label.subtle { fill: var(--muted); font-size: 10px; }
+    .kind-label {
+      fill: var(--muted);
+      font-size: 10px;
+      font-weight: 700;
+      letter-spacing: 0;
+      text-transform: uppercase;
+    }
+
+    .name-label {
+      dominant-baseline: middle;
+    }
 
     .edge {
       fill: none;
-      stroke: #496680;
-      stroke-width: 1.2;
-      stroke-opacity: 0.42;
+      stroke: var(--line);
+      stroke-width: 1.75;
+      stroke-opacity: 0.62;
       pointer-events: none;
     }
 
+    .edge.hierarchy { stroke: #9a90d8; stroke-opacity: 0.72; stroke-width: 2; }
+    .edge.import {
+      marker-end: url(#arrow-flow);
+      stroke: #30d6c5;
+      stroke-opacity: 0.52;
+      stroke-width: 1.8;
+    }
+
     .edge.active {
-      stroke: var(--line);
-      stroke-width: 2.5;
+      stroke: #a89cff;
+      stroke-width: 3;
       stroke-opacity: 0.95;
     }
 
-    .symbols-hidden .symbol-label { display: none; }
+    body[data-view="structure"] .import-edges { display: none; }
+    body[data-view="runtime"] .hierarchy-edges { display: none; }
+    body[data-view="runtime"] .edge.import { stroke-opacity: 0.9; stroke-width: 2.4; }
   </style>
 </head>
 <body>
@@ -144,6 +198,10 @@
     <div>
       <div id="title">Aksi Glass Blueprint</div>
       <div id="meta">Loading architecture.json</div>
+    </div>
+    <div id="viewModes" aria-label="Map view mode">
+      <button type="button" data-view="structure" class="active">Structure</button>
+      <button type="button" data-view="runtime">Runtime Flow</button>
     </div>
   </div>
   <div id="details">
@@ -154,14 +212,35 @@
 
   <script>
     const svg = d3.select("#canvas");
-    const viewport = svg.append("g").attr("class", "viewport symbols-hidden");
-    const edgeLayer = viewport.append("g").attr("class", "edges");
+    const defs = svg.append("defs");
+    defs.append("marker")
+      .attr("id", "arrow-flow")
+      .attr("viewBox", "0 0 10 10")
+      .attr("refX", 9)
+      .attr("refY", 5)
+      .attr("markerWidth", 7)
+      .attr("markerHeight", 7)
+      .attr("orient", "auto-start-reverse")
+      .append("path")
+      .attr("d", "M 0 0 L 10 5 L 0 10 z")
+      .attr("fill", "#30d6c5");
+
+    const viewport = svg.append("g").attr("class", "viewport");
+    const hierarchyEdgeLayer = viewport.append("g").attr("class", "hierarchy-edges");
+    const importEdgeLayer = viewport.append("g").attr("class", "import-edges");
     const nodeLayer = viewport.append("g").attr("class", "nodes");
     const meta = document.querySelector("#meta");
     const details = document.querySelector("#details");
+    const modeButtons = Array.from(document.querySelectorAll("#viewModes button"));
 
     const width = () => window.innerWidth;
     const height = () => window.innerHeight;
+    const viewportMargin = { top: 92, right: 32, bottom: 32, left: 32 };
+    let zoomBehavior = null;
+    let currentGraph = null;
+    let currentView = "structure";
+    let currentDiagramEdges = [];
+    document.body.dataset.view = currentView;
 
     function nodeArray(graph) {
       return Object.values(graph.nodes || {});
@@ -173,73 +252,430 @@
       return d3.hierarchy(root, node => (node.children || []).map(id => nodes[id]).filter(Boolean));
     }
 
-    function centerOf(box) {
-      return [box.x0 + (box.x1 - box.x0) / 2, box.y0 + (box.y1 - box.y0) / 2];
+    function clamp(value, min, max) {
+      return Math.max(min, Math.min(max, value));
+    }
+
+    function splitLongWord(word, limit) {
+      const chunks = [];
+      for (let index = 0; index < word.length; index += limit) {
+        chunks.push(word.slice(index, index + limit));
+      }
+      return chunks;
+    }
+
+    function wrapLabel(text, limit = 28) {
+      const words = String(text || "").split(/\s+/).flatMap(word => (
+        word.length > limit ? splitLongWord(word, limit) : [word]
+      ));
+      const lines = [];
+      let current = "";
+      for (const word of words) {
+        const next = current ? `${current} ${word}` : word;
+        if (next.length > limit && current) {
+          lines.push(current);
+          current = word;
+        } else {
+          current = next;
+        }
+      }
+      if (current) lines.push(current);
+      return lines.length ? lines : [""];
+    }
+
+    function typeLabel(node) {
+      const labels = {
+        repo: "repo name",
+        folder: "dir name",
+        file: "file name",
+        function: "func / method name",
+        class: "class name",
+        interface: "interface name",
+        struct: "struct name",
+        type: "type name",
+        external: "external name",
+        input: "input",
+        process: "process",
+        artifact: "artifact",
+        consumer: "consumer",
+      };
+      return labels[node.type] || `${node.type || "node"} name`;
+    }
+
+    function measureNode(node) {
+      const labelLimit = node.type === "function" || node.type === "class" ? 24 : 30;
+      const lines = wrapLabel(node.name, labelLimit);
+      const longest = Math.max(...lines.map(line => line.length), 8);
+      node.labelLines = lines;
+      node.kindLabel = typeLabel(node);
+      node.boxWidth = clamp(longest * 9.2 + 44, 130, 360);
+      node.boxHeight = clamp(lines.length * 22 + 52, 68, 198);
+      return node;
+    }
+
+    function centerOf(node) {
+      return [node.x, node.y];
+    }
+
+    function rightAnchor(node) {
+      return [node.x + node.boxWidth / 2, node.y];
+    }
+
+    function leftAnchor(node) {
+      return [node.x - node.boxWidth / 2, node.y];
+    }
+
+    function bottomAnchor(node) {
+      return [node.x, node.y + node.boxHeight / 2];
+    }
+
+    function topAnchor(node) {
+      return [node.x, node.y - node.boxHeight / 2];
+    }
+
+    function connector(source, target) {
+      const [sx, sy] = source.y <= target.y ? bottomAnchor(source) : topAnchor(source);
+      if (target.flowStack) {
+        const [tx, ty] = source.x <= target.x ? leftAnchor(target) : rightAnchor(target);
+        return `M${sx},${sy} L${sx},${ty} L${tx},${ty}`;
+      }
+      const [tx, ty] = source.y <= target.y ? topAnchor(target) : bottomAnchor(target);
+      const midY = sy + (ty - sy) / 2;
+      return `M${sx},${sy} L${sx},${midY} L${tx},${midY} L${tx},${ty}`;
+    }
+
+    function directionalAnchors(source, target) {
+      const dx = target.x - source.x;
+      const dy = target.y - source.y;
+      if (Math.abs(dx) > Math.abs(dy)) {
+        return dx >= 0
+          ? [rightAnchor(source), leftAnchor(target)]
+          : [leftAnchor(source), rightAnchor(target)];
+      }
+      return dy >= 0
+        ? [bottomAnchor(source), topAnchor(target)]
+        : [topAnchor(source), bottomAnchor(target)];
+    }
+
+    function flowConnector(source, target) {
+      const [[sx, sy], [tx, ty]] = directionalAnchors(source, target);
+      if (Math.abs(tx - sx) > Math.abs(ty - sy)) {
+        const midX = sx + (tx - sx) / 2;
+        return `M${sx},${sy} L${midX},${sy} L${midX},${ty} L${tx},${ty}`;
+      }
+      const midY = sy + (ty - sy) / 2;
+      return `M${sx},${sy} L${sx},${midY} L${tx},${midY} L${tx},${ty}`;
+    }
+
+    function graphBounds(descendants) {
+      return {
+        minX: d3.min(descendants, item => item.data.x - item.data.boxWidth / 2) || 0,
+        maxX: d3.max(descendants, item => item.data.x + item.data.boxWidth / 2) || width(),
+        minY: d3.min(descendants, item => item.data.y - item.data.boxHeight / 2) || 0,
+        maxY: d3.max(descendants, item => item.data.y + item.data.boxHeight / 2) || height(),
+      };
+    }
+
+    function fitTransform(bounds) {
+      const graphWidth = Math.max(1, bounds.maxX - bounds.minX);
+      const graphHeight = Math.max(1, bounds.maxY - bounds.minY);
+      const availableWidth = Math.max(1, width() - viewportMargin.left - viewportMargin.right);
+      const availableHeight = Math.max(1, height() - viewportMargin.top - viewportMargin.bottom);
+      const verticalScale = availableHeight / graphHeight;
+      const softHorizontalScale = (availableWidth * 1.35) / graphWidth;
+      const scale = clamp(Math.min(verticalScale, softHorizontalScale), 0.24, 1.45);
+      const offsetX = viewportMargin.left + (availableWidth - graphWidth * scale) / 2 - bounds.minX * scale;
+      const offsetY = viewportMargin.top + (availableHeight - graphHeight * scale) / 2 - bounds.minY * scale;
+      return d3.zoomIdentity.translate(offsetX, offsetY).scale(scale);
+    }
+
+    function applyLevelRows(descendants) {
+      const levelGap = 126;
+      const rows = d3.group(descendants, item => item.depth);
+      const rowHeights = new Map(
+        Array.from(rows, ([depth, items]) => [depth, d3.max(items, item => item.data.boxHeight) || 58])
+      );
+      const maxDepth = d3.max(descendants, item => item.depth) || 0;
+      let cursor = 24;
+      for (let depth = 0; depth <= maxDepth; depth += 1) {
+        const rowHeight = rowHeights.get(depth) || 58;
+        const y = cursor + rowHeight / 2;
+        (rows.get(depth) || []).forEach(item => {
+          item.data.y = y;
+        });
+        cursor += rowHeight + levelGap;
+      }
+    }
+
+    function compactHorizontalRows(root, descendants) {
+      const rows = d3.group(descendants, item => item.depth);
+      const rootCenter = root.data.x;
+
+      for (const [depth, items] of rows) {
+        if (depth === 0 || items.length < 2) continue;
+
+        const gap = depth === 1 ? 14 : 8;
+        const sorted = [...items].sort((a, b) => a.data.x - b.data.x);
+        let cursor = sorted[0].data.x - sorted[0].data.boxWidth / 2;
+
+        sorted.forEach(item => {
+          const desiredLeft = item.data.x - item.data.boxWidth / 2;
+          const left = Math.max(desiredLeft, cursor);
+          item.data.x = left + item.data.boxWidth / 2;
+          cursor = left + item.data.boxWidth + gap;
+        });
+
+        const leftEdge = sorted[0].data.x - sorted[0].data.boxWidth / 2;
+        const rightEdge = sorted[sorted.length - 1].data.x + sorted[sorted.length - 1].data.boxWidth / 2;
+        const rowCenter = leftEdge + (rightEdge - leftEdge) / 2;
+        const shift = rootCenter - rowCenter;
+        sorted.forEach(item => {
+          item.data.x += shift;
+        });
+      }
+    }
+
+    function subtreeBottom(item) {
+      const descendants = item.descendants();
+      return d3.max(descendants, child => child.data.y + child.data.boxHeight / 2) || item.data.y;
+    }
+
+    function stackChildren(parent, rootCenter) {
+      if (!parent.children || parent.children.length === 0) return;
+
+      const shouldStack = parent.depth >= 1 && (parent.children.length > 2 || parent.depth >= 2);
+      if (!shouldStack) {
+        parent.children.forEach(child => stackChildren(child, rootCenter));
+        return;
+      }
+
+      const side = parent.data.x <= rootCenter ? 1 : -1;
+      const maxChildWidth = d3.max(parent.children, child => child.data.boxWidth) || 140;
+      const columnX = parent.data.x + side * (parent.data.boxWidth / 2 + maxChildWidth / 2 + 34);
+      let cursorY = parent.data.y + parent.data.boxHeight / 2 + 34;
+
+      parent.children.forEach(child => {
+        child.data.x = columnX;
+        child.data.y = cursorY + child.data.boxHeight / 2;
+        child.data.flowStack = true;
+        stackChildren(child, rootCenter);
+        cursorY = subtreeBottom(child) + 12;
+      });
+    }
+
+    function annotateKindLabels(root) {
+      root.each(item => {
+        item.data.showKindLabel = true;
+      });
+    }
+
+    function buildRuntimeFlow() {
+      const items = [
+        {
+          id: "runtime:user-input",
+          type: "input",
+          name: "Repo path or current folder",
+          detail: "User runs Aksi against a local repository.",
+          level: 0,
+        },
+        {
+          id: "runtime:runner",
+          type: "process",
+          name: "aksi.py",
+          detail: "One-command entrypoint scans first, then starts the static UI server.",
+          level: 1,
+        },
+        {
+          id: "runtime:scanner",
+          type: "process",
+          name: "scanner.py",
+          detail: "Walks source files, skips generated folders, hashes files, extracts symbols and imports.",
+          level: 2,
+        },
+        {
+          id: "runtime:cache",
+          type: "artifact",
+          name: "Files/.aksi_cache",
+          detail: "Stores file hashes for changed/stale detection.",
+          level: 3,
+        },
+        {
+          id: "runtime:graph",
+          type: "process",
+          name: "graph.py",
+          detail: "Builds repo/folder/file/symbol nodes and import edges.",
+          level: 3,
+        },
+        {
+          id: "runtime:architecture",
+          type: "artifact",
+          name: "Files/architecture.json",
+          detail: "Generated architecture map consumed by the UI and MCP tools.",
+          level: 4,
+        },
+        {
+          id: "runtime:ui",
+          type: "consumer",
+          name: "ui/index.html",
+          detail: "Loads architecture.json and renders the visual maps in the browser.",
+          level: 5,
+        },
+        {
+          id: "runtime:mcp",
+          type: "consumer",
+          name: "mcp_server.py",
+          detail: "Exposes scan_repo, get_map, and get_context to MCP-capable AI hosts.",
+          level: 5,
+        },
+      ];
+
+      const edges = [
+        ["runtime:user-input", "runtime:runner", "command input"],
+        ["runtime:runner", "runtime:scanner", "scan request"],
+        ["runtime:scanner", "runtime:cache", "hash state"],
+        ["runtime:scanner", "runtime:graph", "files, symbols, imports"],
+        ["runtime:graph", "runtime:architecture", "write map"],
+        ["runtime:architecture", "runtime:ui", "render map"],
+        ["runtime:architecture", "runtime:mcp", "serve context"],
+      ].map(([source, target, label], index) => ({
+        id: `runtime-edge:${index}`,
+        type: "runtime",
+        source,
+        target,
+        import_text: label,
+      }));
+
+      items.forEach(item => {
+        item.children = [];
+        item.kindLabel = typeLabel(item);
+        item.showKindLabel = true;
+        measureNode(item);
+      });
+      return { items, edges };
+    }
+
+    function layoutRuntimeItems(items) {
+      const levels = d3.group(items, item => item.level);
+      const orderedLevels = Array.from(levels.keys()).sort((a, b) => a - b);
+      const levelGap = 126;
+      let cursorY = 24;
+
+      orderedLevels.forEach(level => {
+        const row = levels.get(level);
+        const rowHeight = d3.max(row, item => item.boxHeight) || 68;
+        let cursorX = 24;
+        row.forEach(item => {
+          item.x = cursorX + item.boxWidth / 2;
+          item.y = cursorY + rowHeight / 2;
+          cursorX += item.boxWidth + 24;
+        });
+        cursorY += rowHeight + levelGap;
+      });
     }
 
     function updateDetails(node, graph) {
-      const edges = (graph.edges || []).filter(edge => edge.source === node.id || edge.target === node.id);
+      const edges = currentDiagramEdges.filter(edge => edge.source === node.id || edge.target === node.id);
+      const outgoing = currentDiagramEdges.filter(edge => edge.source === node.id);
+      const incoming = currentDiagramEdges.filter(edge => edge.target === node.id);
       const lines = [
         `<h2>${node.name}</h2>`,
         `<p>${node.type}${node.language ? " · " + node.language : ""}${node.stale ? " · stale" : ""}</p>`,
-        `<p>${node.path || ""}</p>`,
       ];
+      if (node.path) lines.push(`<p>${node.path}</p>`);
+      if (node.detail) lines.push(`<p>${node.detail}</p>`);
       if (node.start_line) lines.push(`<p>Lines ${node.start_line}-${node.end_line}</p>`);
-      if (edges.length) lines.push(`<p>${edges.length} connected import edge${edges.length === 1 ? "" : "s"}</p>`);
+      if (edges.length) lines.push(`<p>${edges.length} connected edge${edges.length === 1 ? "" : "s"}</p>`);
+      if (outgoing.length || incoming.length) {
+        lines.push(`<p>Flow: ${outgoing.length} out · ${incoming.length} in</p>`);
+      }
       details.innerHTML = lines.join("");
     }
 
-    function render(graph) {
+    function renderStructure(graph) {
       const root = buildHierarchy(graph);
-      const pack = d3.pack().size([width() - 80, height() - 120]).padding(d => d.depth < 2 ? 18 : 6);
-      const packed = pack(root.sum(d => Math.max(1, (d.children || []).length || 1)));
-      packed.each(d => {
-        d.data.x0 = d.x - d.r;
-        d.data.y0 = d.y - d.r;
-        d.data.x1 = d.x + d.r;
-        d.data.y1 = d.y + d.r;
-      });
+      root.each(item => measureNode(item.data));
 
-      const byId = new Map(nodeArray(graph).map(node => [node.id, node]));
-      const packedById = new Map(packed.descendants().map(item => [item.data.id, item.data]));
-      const visibleEdges = (graph.edges || []).filter(edge => packedById.has(edge.source) && packedById.has(edge.target));
-
-      edgeLayer.selectAll("path")
-        .data(visibleEdges, edge => edge.id)
-        .join("path")
-        .attr("class", "edge")
-        .attr("d", edge => {
-          const source = packedById.get(edge.source);
-          const target = packedById.get(edge.target);
-          const [sx, sy] = centerOf(source);
-          const [tx, ty] = centerOf(target);
-          const mx = (sx + tx) / 2;
-          return `M${sx},${sy} C${mx},${sy} ${mx},${ty} ${tx},${ty}`;
+      const layout = d3.tree()
+        .nodeSize([120, 1])
+        .separation((a, b) => {
+          const width = Math.max(a.data.boxWidth, b.data.boxWidth);
+          return (a.parent === b.parent ? 0.52 : 0.75) + width / 620;
         });
+      layout(root);
+
+      const descendants = root.descendants();
+      const centerX = root.x;
+      const horizontalCompression = 0.55;
+      descendants.forEach(item => {
+        item.data.x = centerX + (item.x - centerX) * horizontalCompression;
+        item.data.flowStack = false;
+      });
+      compactHorizontalRows(root, descendants);
+      applyLevelRows(descendants);
+      stackChildren(root, root.data.x);
+      annotateKindLabels(root);
+
+      const minX = d3.min(descendants, item => item.data.x - item.data.boxWidth / 2) || 0;
+      const minY = d3.min(descendants, item => item.data.y - item.data.boxHeight / 2) || 0;
+      descendants.forEach(item => {
+        item.data.x += 24 - minX;
+        item.data.y += 24 - minY;
+      });
+      const bounds = graphBounds(descendants);
+
+      const laidOutById = new Map(descendants.map(item => [item.data.id, item.data]));
+      const visibleImports = (graph.edges || []).filter(edge => laidOutById.has(edge.source) && laidOutById.has(edge.target));
+      currentDiagramEdges = visibleImports;
+
+      hierarchyEdgeLayer.selectAll("path")
+        .data(root.links(), edge => `${edge.source.data.id}->${edge.target.data.id}`)
+        .join("path")
+        .attr("class", "edge hierarchy")
+        .attr("d", edge => connector(edge.source.data, edge.target.data));
+
+      importEdgeLayer.selectAll("path")
+        .data(visibleImports, edge => edge.id)
+        .join("path")
+        .attr("class", "edge import")
+        .attr("d", edge => flowConnector(laidOutById.get(edge.source), laidOutById.get(edge.target)));
 
       const node = nodeLayer.selectAll("g.node")
-        .data(packed.descendants(), item => item.data.id)
+        .data(descendants, item => item.data.id)
         .join(enter => {
           const group = enter.append("g").attr("class", item => classes(item.data));
-          group.append("rect").attr("rx", 6).attr("ry", 6);
-          group.append("text").attr("class", "label").attr("x", 8).attr("y", 7);
-          group.append("text").attr("class", "label subtle symbol-label").attr("x", 8).attr("y", 23);
+          group.append("rect").attr("rx", 8).attr("ry", 8);
+          group.append("text").attr("class", "label kind-label");
+          group.append("text").attr("class", "label name-label");
           return group;
         })
         .attr("class", item => classes(item.data))
-        .attr("transform", item => `translate(${item.data.x0},${item.data.y0})`);
+        .attr("transform", item => `translate(${item.data.x - item.data.boxWidth / 2},${item.data.y - item.data.boxHeight / 2})`);
 
       node.select("rect")
-        .attr("width", item => Math.max(4, item.data.x1 - item.data.x0))
-        .attr("height", item => Math.max(4, item.data.y1 - item.data.y0));
+        .attr("width", item => item.data.boxWidth)
+        .attr("height", item => item.data.boxHeight);
 
-      node.select("text.label")
-        .text(item => item.data.name)
-        .style("display", item => item.r > 20 ? null : "none");
+      node.select("text.kind-label")
+        .attr("x", item => item.data.boxWidth / 2)
+        .attr("y", 16)
+        .style("display", item => item.data.showKindLabel ? null : "none")
+        .text(item => item.data.kindLabel);
 
-      node.select("text.subtle")
-        .text(item => item.data.type)
-        .style("display", item => item.r > 32 ? null : "none");
+      node.select("text.name-label")
+        .attr("x", item => item.data.boxWidth / 2)
+        .attr("y", item => item.data.showKindLabel ? item.data.boxHeight / 2 + 8 : item.data.boxHeight / 2)
+        .each(function(item) {
+          const text = d3.select(this);
+          text.selectAll("tspan").remove();
+          const lineHeight = 22;
+          const start = -((item.data.labelLines.length - 1) * lineHeight) / 2;
+          item.data.labelLines.forEach((line, index) => {
+            text.append("tspan")
+              .attr("x", item.data.boxWidth / 2)
+              .attr("dy", index === 0 ? start : lineHeight)
+              .text(line);
+          });
+        });
 
       node.on("click", (event, item) => {
         event.stopPropagation();
@@ -248,16 +684,109 @@
 
       svg.on("click", () => selectNode(null, graph));
 
-      const zoom = d3.zoom()
-        .scaleExtent([0.35, 8])
+      zoomBehavior = d3.zoom()
+        .scaleExtent([0.1, 8])
         .on("zoom", event => {
           viewport.attr("transform", event.transform);
-          viewport.classed("symbols-hidden", event.transform.k < 1.5);
         });
-      svg.call(zoom);
-      svg.call(zoom.transform, d3.zoomIdentity.translate(40, 88));
+      svg.call(zoomBehavior);
+      svg.call(zoomBehavior.transform, fitTransform(bounds));
 
       meta.textContent = `${nodeArray(graph).filter(item => item.type === "file").length} files · ${(graph.edges || []).length} edges · ${graph.scanner?.stale_files || 0} stale`;
+    }
+
+    function renderRuntimeFlow(graph) {
+      const { items, edges } = buildRuntimeFlow();
+      layoutRuntimeItems(items);
+
+      const bounds = graphBounds(items.map(data => ({ data })));
+      const laidOutById = new Map(items.map(item => [item.id, item]));
+      currentDiagramEdges = edges;
+
+      hierarchyEdgeLayer.selectAll("path")
+        .data([])
+        .join("path");
+
+      importEdgeLayer.selectAll("path")
+        .data(edges, edge => edge.id)
+        .join("path")
+        .attr("class", "edge import")
+        .attr("d", edge => flowConnector(laidOutById.get(edge.source), laidOutById.get(edge.target)));
+
+      const node = nodeLayer.selectAll("g.node")
+        .data(items.map(data => ({ data })), item => item.data.id)
+        .join(enter => {
+          const group = enter.append("g").attr("class", item => classes(item.data));
+          group.append("rect").attr("rx", 8).attr("ry", 8);
+          group.append("text").attr("class", "label kind-label");
+          group.append("text").attr("class", "label name-label");
+          return group;
+        })
+        .attr("class", item => classes(item.data))
+        .attr("transform", item => `translate(${item.data.x - item.data.boxWidth / 2},${item.data.y - item.data.boxHeight / 2})`);
+
+      node.select("rect")
+        .attr("width", item => item.data.boxWidth)
+        .attr("height", item => item.data.boxHeight);
+
+      node.select("text.kind-label")
+        .attr("x", item => item.data.boxWidth / 2)
+        .attr("y", 16)
+        .style("display", null)
+        .text(item => item.data.kindLabel);
+
+      node.select("text.name-label")
+        .attr("x", item => item.data.boxWidth / 2)
+        .attr("y", item => item.data.boxHeight / 2 + 8)
+        .each(function(item) {
+          const text = d3.select(this);
+          text.selectAll("tspan").remove();
+          const lineHeight = 22;
+          const start = -((item.data.labelLines.length - 1) * lineHeight) / 2;
+          item.data.labelLines.forEach((line, index) => {
+            text.append("tspan")
+              .attr("x", item.data.boxWidth / 2)
+              .attr("dy", index === 0 ? start : lineHeight)
+              .text(line);
+          });
+        });
+
+      node.on("click", (event, item) => {
+        event.stopPropagation();
+        selectNode(item.data, graph);
+      });
+
+      svg.on("click", () => selectNode(null, graph));
+
+      zoomBehavior = d3.zoom()
+        .scaleExtent([0.1, 8])
+        .on("zoom", event => {
+          viewport.attr("transform", event.transform);
+        });
+      svg.call(zoomBehavior);
+      svg.call(zoomBehavior.transform, fitTransform(bounds));
+
+      meta.textContent = `${items.length} runtime steps · ${edges.length} process edges`;
+    }
+
+    function render(graph) {
+      if (currentView === "runtime") {
+        renderRuntimeFlow(graph);
+        return;
+      }
+      renderStructure(graph);
+    }
+
+    function setViewMode(mode) {
+      currentView = mode;
+      document.body.dataset.view = mode;
+      modeButtons.forEach(button => {
+        button.classList.toggle("active", button.dataset.view === mode);
+      });
+      if (currentGraph) {
+        selectNode(null, currentGraph);
+        render(currentGraph);
+      }
     }
 
     function classes(node) {
@@ -269,7 +798,7 @@
     function selectNode(selected, graph) {
       const relatedIds = new Set();
       if (selected) {
-        for (const edge of graph.edges || []) {
+        for (const edge of currentDiagramEdges) {
           if (edge.source === selected.id || edge.target === selected.id) {
             relatedIds.add(edge.source);
             relatedIds.add(edge.target);
@@ -284,20 +813,31 @@
         .classed("selected", item => selected && item.data.id === selected.id)
         .classed("connected", item => selected && relatedIds.has(item.data.id) && item.data.id !== selected.id);
 
-      edgeLayer.selectAll("path.edge")
+      importEdgeLayer.selectAll("path.edge")
         .classed("active", edge => selected && (edge.source === selected.id || edge.target === selected.id));
     }
+
+    modeButtons.forEach(button => {
+      button.addEventListener("click", () => setViewMode(button.dataset.view));
+    });
 
     fetch("../Files/architecture.json", { cache: "no-store" })
       .then(response => {
         if (!response.ok) throw new Error(`HTTP ${response.status}`);
         return response.json();
       })
-      .then(render)
+      .then(graph => {
+        currentGraph = graph;
+        render(graph);
+      })
       .catch(error => {
         meta.textContent = "Could not load ../Files/architecture.json";
         details.innerHTML = `<h2>Map unavailable</h2><p>${error.message}</p>`;
       });
+
+    window.addEventListener("resize", () => {
+      if (currentGraph) render(currentGraph);
+    });
   </script>
 </body>
 </html>
