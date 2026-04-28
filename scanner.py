@@ -18,10 +18,9 @@ from pathlib import Path
 from typing import Any, Iterable
 
 try:
-    from tree_sitter import Language, Node, Parser
+    from tree_sitter import Language, Parser
 except Exception:  # pragma: no cover - dependency error is reported at runtime
     Language = None  # type: ignore[assignment]
-    Node = None  # type: ignore[assignment]
     Parser = None  # type: ignore[assignment]
 
 
@@ -316,9 +315,6 @@ def fallback_extract_symbols(text: str, language: str) -> list[Symbol]:
             (re.compile(r"\b(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=\s*(?:async\s*)?\([^)]*\)\s*=>", re.MULTILINE), "function"),
         ]
     symbols: list[Symbol] = []
-    line_starts = [0]
-    for match in re.finditer(r"\n", text):
-        line_starts.append(match.end())
     for pattern, kind in patterns:
         for match in pattern.finditer(text):
             line = text.count("\n", 0, match.start()) + 1

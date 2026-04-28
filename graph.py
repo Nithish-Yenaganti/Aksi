@@ -5,12 +5,11 @@ from __future__ import annotations
 import argparse
 import json
 import re
-from dataclasses import asdict
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from scanner import FILES_DIR_NAME, ScanResult, ScannedFile, hash_file, scan_repo
+from scanner import FILES_DIR_NAME, ScanResult, hash_file, scan_repo
 
 ARCHITECTURE_FILENAME = "architecture.json"
 

@@ -68,9 +68,21 @@ python mcp_server.py
 
 Available tools:
 
+- `generate_visualization(path: str = ".")`
 - `scan_repo(path: str = ".")`
 - `get_map(path: str = ".")`
 - `get_context(node_id: str, path: str = ".")`
+- `save_summary(node_id: str, summary, path: str = ".")`
+- `get_summary(node_id: str, path: str = ".")`
+- `list_summaries(path: str = ".")`
+
+Normal MCP workflow:
+
+1. The user asks their LLM host to add or inspect the visualization.
+2. The host calls `generate_visualization`; users do not need to run `aksi.py`.
+3. The host calls `get_context` for exact source before writing any explanation.
+4. The host writes the summary and calls `save_summary`.
+5. Aksi stores summaries under `Files/context/` with file hashes, so `get_summary` can report stale summaries after source changes.
 
 ## View the Map
 

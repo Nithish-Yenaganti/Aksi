@@ -89,6 +89,7 @@
     }
 
     #details {
+      display: none;
       position: fixed;
       right: 12px;
       bottom: 12px;
@@ -103,9 +104,21 @@
       box-shadow: 0 12px 40px rgba(0, 0, 0, 0.35);
     }
 
+    #details.open {
+      display: block;
+    }
+
     #details h2 {
       margin: 0 0 6px;
       font-size: 14px;
+    }
+
+    #details h3 {
+      margin: 12px 0 4px;
+      color: var(--ink);
+      font-size: 11px;
+      letter-spacing: 0;
+      text-transform: uppercase;
     }
 
     #details p {
@@ -205,8 +218,6 @@
     </div>
   </div>
   <div id="details">
-    <h2>No node selected</h2>
-    <p>Click a box to trace imports and inspect metadata.</p>
   </div>
   <svg id="canvas" role="img" aria-label="Aksi codebase map"></svg>
 
@@ -240,6 +251,8 @@
     let currentGraph = null;
     let currentView = "structure";
     let currentDiagramEdges = [];
+    let selectedNodeId = null;
+    let summaryIndex = {};
     document.body.dataset.view = currentView;
 
     function nodeArray(graph) {
@@ -254,6 +267,15 @@
 
     function clamp(value, min, max) {
       return Math.max(min, Math.min(max, value));
+    }
+
+    function escapeHtml(value) {
+      return String(value || "")
+        .replaceAll("&", "&amp;")
+        .replaceAll("<", "&lt;")
+        .replaceAll(">", "&gt;")
+        .replaceAll('"', "&quot;")
+        .replaceAll("'", "&#039;");
     }
 
     function splitLongWord(word, limit) {
@@ -311,10 +333,6 @@
       node.boxWidth = clamp(longest * 9.2 + 44, 130, 360);
       node.boxHeight = clamp(lines.length * 22 + 52, 68, 198);
       return node;
-    }
-
-    function centerOf(node) {
-      return [node.x, node.y];
     }
 
     function rightAnchor(node) {
@@ -573,22 +591,122 @@
       });
     }
 
+    function describeStructureNode(node, incoming, outgoing) {
+      const connected = incoming.length + outgoing.length;
+      const base = {
+        what: `${typeLabel(node)} in the generated repository map.`,
+        why: "It gives the map a selectable unit so the UI and MCP host can explain this part of the codebase.",
+        how: "Aksi creates this rectangle from the generated architecture JSON.",
+        role: "It participates in the structure diagram and can be selected for context.",
+      };
+
+      if (node.type === "repo") {
+        return {
+          what: "The scanned repository root.",
+          why: "It anchors the whole blueprint so every folder, file, and symbol has a single parent map.",
+          how: "The graph builder creates it once from the repository path before adding discovered children.",
+          role: "Top-level container for the complete codebase structure.",
+        };
+      }
+      if (node.type === "folder") {
+        return {
+          what: `Directory named ${node.name}.`,
+          why: "It groups related files and keeps the map aligned with the real filesystem.",
+          how: "The graph builder derives it from file paths discovered by the scanner.",
+          role: "Container that organizes child folders and files.",
+        };
+      }
+      if (node.type === "file") {
+        return {
+          what: `${node.language || "Source"} file named ${node.name}.`,
+          why: "Files are the main rooms in the blueprint: they hold symbols and connect to other files through imports.",
+          how: "The scanner hashes this file, extracts symbols/imports, and the graph builder turns it into a file node.",
+          role: `Source container with ${outgoing.length} outgoing and ${incoming.length} incoming relationship${connected === 1 ? "" : "s"}.`,
+        };
+      }
+      if (["function", "class", "interface", "struct", "type"].includes(node.type)) {
+        return {
+          what: `${node.type} named ${node.name}.`,
+          why: "Symbols show the useful internal parts of a file instead of treating code as one flat text blob.",
+          how: "Tree-sitter or the fallback parser found this symbol and recorded its line range.",
+          role: `Code-level unit inside ${node.path || "its file"}${node.start_line ? ` at lines ${node.start_line}-${node.end_line}` : ""}.`,
+        };
+      }
+      if (node.type === "external") {
+        return {
+          what: `External dependency or unresolved import named ${node.name}.`,
+          why: "It shows when local code depends on something outside the scanned repository map.",
+          how: "The graph builder creates this when an import cannot be resolved to a local file.",
+          role: `Dependency endpoint with ${incoming.length} incoming reference${incoming.length === 1 ? "" : "s"}.`,
+        };
+      }
+      return base;
+    }
+
+    function describeRuntimeNode(node, incoming, outgoing) {
+      return {
+        what: node.detail || `${node.type} step in the Aksi runtime flow.`,
+        why: "It explains how user input becomes a generated map and then becomes visible to the UI or MCP host.",
+        how: outgoing.length
+          ? `It receives input, performs its step, then passes output to ${outgoing.length} downstream step${outgoing.length === 1 ? "" : "s"}.`
+          : "It consumes the generated output at the end of the flow.",
+        role: `${typeLabel(node)} with ${incoming.length} incoming and ${outgoing.length} outgoing connection${incoming.length + outgoing.length === 1 ? "" : "s"}.`,
+      };
+    }
+
+    function nodeSummary(node, incoming, outgoing) {
+      const saved = summaryIndex[node.id];
+      if (saved && saved.summary) {
+        const summary = saved.summary;
+        if (typeof summary === "string") {
+          return {
+            what: summary,
+            why: saved.stale ? "This saved LLM summary may be stale because the source file changed." : "This was saved by the LLM host for reuse.",
+            how: "The LLM host read exact source through Aksi MCP get_context, then persisted this explanation with save_summary.",
+            role: "Cached context for future questions about this rectangle.",
+            source: saved.stale ? "Saved LLM summary (stale)" : "Saved LLM summary",
+          };
+        }
+        return {
+          what: summary.what || summary.summary || "Saved LLM summary is available for this rectangle.",
+          why: summary.why || (saved.stale ? "This saved summary may be stale because the source file changed." : "This saved summary reduces repeated context reading."),
+          how: summary.how || "The LLM host produced this after reading exact code through Aksi MCP get_context.",
+          role: summary.role || "Cached explanation for future LLM and user context.",
+          source: saved.stale ? "Saved LLM summary (stale)" : "Saved LLM summary",
+        };
+      }
+      return currentView === "runtime"
+        ? { ...describeRuntimeNode(node, incoming, outgoing), source: "Local fallback summary" }
+        : { ...describeStructureNode(node, incoming, outgoing), source: "Local fallback summary" };
+    }
+
     function updateDetails(node, graph) {
       const edges = currentDiagramEdges.filter(edge => edge.source === node.id || edge.target === node.id);
       const outgoing = currentDiagramEdges.filter(edge => edge.source === node.id);
       const incoming = currentDiagramEdges.filter(edge => edge.target === node.id);
-      const lines = [
-        `<h2>${node.name}</h2>`,
-        `<p>${node.type}${node.language ? " · " + node.language : ""}${node.stale ? " · stale" : ""}</p>`,
-      ];
-      if (node.path) lines.push(`<p>${node.path}</p>`);
-      if (node.detail) lines.push(`<p>${node.detail}</p>`);
-      if (node.start_line) lines.push(`<p>Lines ${node.start_line}-${node.end_line}</p>`);
-      if (edges.length) lines.push(`<p>${edges.length} connected edge${edges.length === 1 ? "" : "s"}</p>`);
-      if (outgoing.length || incoming.length) {
-        lines.push(`<p>Flow: ${outgoing.length} out · ${incoming.length} in</p>`);
-      }
-      details.innerHTML = lines.join("");
+      const summary = nodeSummary(node, incoming, outgoing);
+      const meta = [
+        node.type,
+        node.language,
+        node.stale ? "stale" : "",
+        node.path,
+      ].filter(Boolean).join(" · ");
+
+      details.classList.add("open");
+      details.innerHTML = [
+        `<h2>${escapeHtml(node.name)}</h2>`,
+        `<p>${escapeHtml(meta)}</p>`,
+        `<p>${escapeHtml(summary.source)}</p>`,
+        "<h3>What It Is</h3>",
+        `<p>${escapeHtml(summary.what)}</p>`,
+        "<h3>Why We Need It</h3>",
+        `<p>${escapeHtml(summary.why)}</p>`,
+        "<h3>How It Works</h3>",
+        `<p>${escapeHtml(summary.how)}</p>`,
+        "<h3>Role</h3>",
+        `<p>${escapeHtml(summary.role)}</p>`,
+        `<p>${edges.length} connected edge${edges.length === 1 ? "" : "s"} · ${outgoing.length} out · ${incoming.length} in</p>`,
+      ].join("");
     }
 
     function renderStructure(graph) {
@@ -625,7 +743,13 @@
 
       const laidOutById = new Map(descendants.map(item => [item.data.id, item.data]));
       const visibleImports = (graph.edges || []).filter(edge => laidOutById.has(edge.source) && laidOutById.has(edge.target));
-      currentDiagramEdges = visibleImports;
+      const hierarchyEdges = root.links().map((edge, index) => ({
+        id: `hierarchy-edge:${index}`,
+        type: "hierarchy",
+        source: edge.source.data.id,
+        target: edge.target.data.id,
+      }));
+      currentDiagramEdges = hierarchyEdges;
 
       hierarchyEdgeLayer.selectAll("path")
         .data(root.links(), edge => `${edge.source.data.id}->${edge.target.data.id}`)
@@ -692,7 +816,9 @@
       svg.call(zoomBehavior);
       svg.call(zoomBehavior.transform, fitTransform(bounds));
 
-      meta.textContent = `${nodeArray(graph).filter(item => item.type === "file").length} files · ${(graph.edges || []).length} edges · ${graph.scanner?.stale_files || 0} stale`;
+      const files = nodeArray(graph).filter(item => item.type === "file").length;
+      const symbols = nodeArray(graph).filter(item => ["function", "class", "interface", "struct", "type"].includes(item.type)).length;
+      meta.textContent = `${files} files · ${symbols} symbols · ${root.links().length} tree links · ${graph.scanner?.stale_files || 0} stale`;
     }
 
     function renderRuntimeFlow(graph) {
@@ -784,6 +910,7 @@
         button.classList.toggle("active", button.dataset.view === mode);
       });
       if (currentGraph) {
+        selectedNodeId = null;
         selectNode(null, currentGraph);
         render(currentGraph);
       }
@@ -796,6 +923,10 @@
     }
 
     function selectNode(selected, graph) {
+      if (selected && selectedNodeId === selected.id) {
+        selected = null;
+      }
+      selectedNodeId = selected ? selected.id : null;
       const relatedIds = new Set();
       if (selected) {
         for (const edge of currentDiagramEdges) {
@@ -806,7 +937,8 @@
         }
         updateDetails(selected, graph);
       } else {
-        details.innerHTML = "<h2>No node selected</h2><p>Click a box to trace imports and inspect metadata.</p>";
+        details.classList.remove("open");
+        details.innerHTML = "";
       }
 
       nodeLayer.selectAll("g.node")
@@ -815,6 +947,8 @@
 
       importEdgeLayer.selectAll("path.edge")
         .classed("active", edge => selected && (edge.source === selected.id || edge.target === selected.id));
+      hierarchyEdgeLayer.selectAll("path.edge")
+        .classed("active", edge => selected && (edge.source.data.id === selected.id || edge.target.data.id === selected.id));
     }
 
     modeButtons.forEach(button => {
@@ -822,9 +956,19 @@
     });
 
     fetch("../Files/architecture.json", { cache: "no-store" })
-      .then(response => {
+      .then(async response => {
         if (!response.ok) throw new Error(`HTTP ${response.status}`);
-        return response.json();
+        const graph = await response.json();
+        try {
+          const summaries = await fetch("../Files/context/index.json", { cache: "no-store" });
+          if (summaries.ok) {
+            const payload = await summaries.json();
+            summaryIndex = payload.summaries || {};
+          }
+        } catch (_error) {
+          summaryIndex = {};
+        }
+        return graph;
       })
       .then(graph => {
         currentGraph = graph;
