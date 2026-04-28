@@ -13,6 +13,7 @@ dependencies = [
 ]
 
 [project.scripts]
+aksi = "aksi:main"
 aksi-scan = "src.engine.scanner:main"
 aksi-graph = "src.engine.graph:main"
 aksi-mcp = "src.mcp.server:main"

@@ -1,19 +1,19 @@
 from __future__ import annotations
 
+import json
 import socket
 import subprocess
 import sys
 import time
 from pathlib import Path
-from urllib.request import urlopen
+from urllib.request import Request, urlopen
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from src.engine.graph import build_graph
-from src.engine.scanner import scan_repo
+from aksi import build_all
 
 
-def free_port(start: int = 8765) -> int:
+def free_port(start: int = 8780) -> int:
     for port in range(start, start + 20):
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
             try:
@@ -40,24 +40,30 @@ def wait_for(url: str, process: subprocess.Popen[str]) -> str:
     raise RuntimeError(f"Timed out waiting for {url}: {last_error}")
 
 
-def main() -> None:
-    scan_repo(Path("tests/fixtures/phase1_repo"), Path("Files/symbols.json"))
-    build_graph(Path("Files/symbols.json"), Path("Files/graph.json"))
+def post_json(url: str, payload: dict[str, str]) -> dict[str, object]:
+    request = Request(
+        url,
+        data=json.dumps(payload).encode("utf-8"),
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+    with urlopen(request, timeout=2) as response:
+        return json.loads(response.read().decode("utf-8"))
 
-    html = Path("src/web/static/index.html").read_text(encoding="utf-8")
-    script = Path("src/web/static/script.js").read_text(encoding="utf-8")
-    assert "https://cdn.jsdelivr.net/npm/d3@7" in html
-    assert "d3.tree" in script
-    assert "d3.zoom" in script
-    assert "fetch(\"/graph.json\")" in script
+
+def main() -> None:
+    result = build_all(Path("tests/fixtures/phase1_repo"), Path("Files"))
+    assert result["files"] == 3, result
+    assert result["context_artifacts"] >= 6, result
+    assert Path("Files/context/web__widget.js.json").exists()
+    assert Path("Files/context/functions/web__widget.js--renderWidget.json").exists()
 
     port = free_port()
     process = subprocess.Popen(
         [
             sys.executable,
-            "-m",
-            "src.web.app",
-            "--stdlib",
+            "aksi.py",
+            "tests/fixtures/phase1_repo",
             "--files",
             "Files",
             "--host",
@@ -70,12 +76,15 @@ def main() -> None:
         text=True,
     )
     try:
-        page = wait_for(f"http://127.0.0.1:{port}/src/web/static/index.html", process)
+        page = wait_for(f"http://127.0.0.1:{port}/", process)
         graph = wait_for(f"http://127.0.0.1:{port}/graph.json", process)
+        search = wait_for(f"http://127.0.0.1:{port}/api/search?q=renderWidget", process)
+        answer = post_json(f"http://127.0.0.1:{port}/api/chat", {"question": "renderWidget"})
         assert "Aksi Cognitive Map" in page
-        assert "pkg/service.py" in graph
         assert "web/widget.js" in graph
-        print(f"Phase 4 gate passed: http://127.0.0.1:{port}/src/web/static/index.html")
+        assert "web/widget.js" in search
+        assert answer["matches"], answer
+        print(f"Product flow gate passed: http://127.0.0.1:{port}/")
     finally:
         process.terminate()
         try:

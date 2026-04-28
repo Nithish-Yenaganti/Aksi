@@ -1,4 +1,4 @@
-"""Phase 3 FastMCP bridge: expose scanner, symbol search, and file context tools."""
+"""Phase 3 FastMCP bridge: expose scanner, graph, search, and context tools."""
 
 from __future__ import annotations
 
@@ -6,9 +6,11 @@ import argparse
 from pathlib import Path
 from typing import Any
 
+from src.engine.context import build_context_artifacts, explain_node, search_graph
 from src.engine.graph import build_graph
 from src.engine.io import read_json
 from src.engine.scanner import file_sha256, scan_repo as run_scanner
+from src.engine.sync import refresh_stale_state
 
 DEFAULT_OUTPUT_DIR = Path("Files")
 
@@ -18,16 +20,20 @@ def scan_repo(repo_path: str, output_dir: str = str(DEFAULT_OUTPUT_DIR)) -> dict
     output = Path(output_dir)
     symbols_path = output / "symbols.json"
     graph_path = output / "graph.json"
+    context_path = output / "context"
 
     index = run_scanner(repo, symbols_path)
     graph = build_graph(symbols_path, graph_path)
+    context = build_context_artifacts(symbols_path, graph_path, context_path)
 
     return {
         "repo": str(repo),
         "symbols_path": str(symbols_path),
         "graph_path": str(graph_path),
+        "context_path": str(context_path),
         "files": len(index.files),
         "edges": len(graph.edges),
+        "context_artifacts": context["artifacts"],
         "parser_backend": index.parser_backend,
     }
 
@@ -98,6 +104,38 @@ def get_file_context(
     }
 
 
+def get_function_context(
+    path: str,
+    function_name: str,
+    repo_path: str,
+    symbols_path: str = "Files/symbols.json",
+    graph_path: str = "Files/graph.json",
+) -> dict[str, Any]:
+    file_context = get_file_context(path, repo_path, symbols_path, graph_path)
+    functions = file_context["summary"]["functions"]
+    function_record = next((record for record in functions if record.get("name") == function_name), None)
+    if function_record is None:
+        raise KeyError(f"Function not found in {path}: {function_name}")
+
+    return {
+        "path": file_context["path"],
+        "function": function_record,
+        "summary": explain_node(f"function:{file_context['path']}:{function_name}", Path(symbols_path), Path(graph_path)),
+        "file_summary": file_context["summary"],
+    }
+
+
+def refresh_repo(repo_path: str, output_dir: str = str(DEFAULT_OUTPUT_DIR)) -> dict[str, Any]:
+    """Rebuild all Aksi artifacts so the host LLM sees the current codebase."""
+    return scan_repo(repo_path, output_dir)
+
+
+def refresh_stale(symbols_path: str = "Files/symbols.json", graph_path: str = "Files/graph.json") -> dict[str, Any]:
+    result = refresh_stale_state(Path(symbols_path), Path(graph_path))
+    build_context_artifacts(Path(symbols_path), Path(graph_path), Path(symbols_path).parent / "context")
+    return result
+
+
 def create_server() -> Any:
     try:
         from fastmcp import FastMCP
@@ -122,6 +160,32 @@ def create_server() -> Any:
         graph_path: str = "Files/graph.json",
     ) -> dict[str, Any]:
         return get_file_context(path, repo_path, symbols_path, graph_path)
+
+    @mcp.tool
+    def get_function_context_tool(
+        path: str,
+        function_name: str,
+        repo_path: str,
+        symbols_path: str = "Files/symbols.json",
+        graph_path: str = "Files/graph.json",
+    ) -> dict[str, Any]:
+        return get_function_context(path, function_name, repo_path, symbols_path, graph_path)
+
+    @mcp.tool
+    def search_graph_tool(query: str, symbols_path: str = "Files/symbols.json", graph_path: str = "Files/graph.json") -> dict[str, Any]:
+        return search_graph(query, Path(symbols_path), Path(graph_path))
+
+    @mcp.tool
+    def explain_node_tool(node_id: str, symbols_path: str = "Files/symbols.json", graph_path: str = "Files/graph.json") -> dict[str, Any]:
+        return explain_node(node_id, Path(symbols_path), Path(graph_path))
+
+    @mcp.tool
+    def refresh_repo_tool(repo_path: str, output_dir: str = str(DEFAULT_OUTPUT_DIR)) -> dict[str, Any]:
+        return refresh_repo(repo_path, output_dir)
+
+    @mcp.tool
+    def refresh_stale_tool(symbols_path: str = "Files/symbols.json", graph_path: str = "Files/graph.json") -> dict[str, Any]:
+        return refresh_stale(symbols_path, graph_path)
 
     return mcp
 

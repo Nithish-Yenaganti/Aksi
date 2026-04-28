@@ -17,11 +17,12 @@ Aksi solves this by producing a local, machine-readable map of the repository. T
 
 ## The Solution
 
-Aksi creates two main artifacts:
+Aksi creates three main artifact groups:
 
 ```text
 Files/symbols.json
 Files/graph.json
+Files/context/
 ```
 
 `symbols.json` is the raw index. It contains:
@@ -40,6 +41,8 @@ Files/graph.json
 - stale flags when files change after scanning
 
 The web viewer renders `graph.json` as a zoomable D3 map.
+
+`Files/context/` contains deterministic per-file and per-function summaries built from the same static map. These are not LLM guesses; they are small context packets an MCP host or UI can request when it needs a focused explanation.
 
 ## Why The Name Aksi
 
@@ -84,16 +87,18 @@ Implemented phases:
    - exposes `scan_repo`
    - exposes `search_symbols`
    - exposes `get_file_context`
+   - exposes graph search, node explanations, function context, stale refresh, and full repo refresh
 
 4. Web map
    - serves a local D3 viewer
    - renders a zoomable hierarchy
    - draws dependency connection lines
+   - includes a local chat/search panel backed by the static graph
 
 5. Sync layer
    - recomputes hashes
    - marks stale files in the JSON artifacts
-   - supports watchdog when installed, with a polling fallback
+   - supports rebuild-on-change from the one-command CLI
 
 ## Project Structure
 
@@ -102,6 +107,7 @@ src/
 ├── engine/
 │   ├── scanner.py
 │   ├── graph.py
+│   ├── context.py
 │   ├── sync.py
 │   └── io.py
 ├── mcp/
@@ -117,16 +123,40 @@ scripts/
 ├── verify_phase2.py
 ├── verify_phase3.py
 ├── verify_phase4.py
-└── verify_phase5.py
+├── verify_phase5.py
+└── verify_product_flow.py
 
 Files/
 ├── symbols.json
-└── graph.json
+├── graph.json
+└── context/
 ```
 
 `Files/` is the output hub. It is generated locally and ignored by git.
 
 ## How To Use
+
+One-command scan and web map:
+
+```bash
+python3 aksi.py /path/to/repo --watch
+```
+
+Open:
+
+```text
+http://127.0.0.1:8765/
+```
+
+This command writes `Files/symbols.json`, `Files/graph.json`, and `Files/context/`, then serves the zoomable map. With `--watch`, Aksi rebuilds those artifacts when tracked source files change.
+
+Build artifacts without serving:
+
+```bash
+python3 aksi.py /path/to/repo --no-serve
+```
+
+Manual phase commands are still available.
 
 Scan a repository:
 
@@ -149,7 +179,7 @@ python3 -m src.web.app --stdlib --files Files --port 8765
 Open:
 
 ```text
-http://127.0.0.1:8765/src/web/static/index.html
+http://127.0.0.1:8765/
 ```
 
 Refresh stale flags:
@@ -164,6 +194,15 @@ Run the MCP server:
 python3 -m src.mcp.server
 ```
 
+MCP host flow:
+
+1. The host LLM calls `scan_repo_tool` or `refresh_repo_tool`.
+2. Aksi updates the generated `Files/` artifacts from static analysis.
+3. The host LLM calls `search_symbols_tool`, `search_graph_tool`, `get_file_context_tool`, `get_function_context_tool`, or `explain_node_tool`.
+4. The host LLM answers using the returned raw code and metadata.
+
+Aksi exposes these tools, but the external LLM host decides when to call them.
+
 ## Verification
 
 Run each gate:
@@ -174,6 +213,7 @@ python3 scripts/verify_phase2.py
 python3 scripts/verify_phase3.py
 python3 scripts/verify_phase4.py
 python3 scripts/verify_phase5.py
+python3 scripts/verify_product_flow.py
 ```
 
 Phase 4 starts a temporary localhost server during verification.
