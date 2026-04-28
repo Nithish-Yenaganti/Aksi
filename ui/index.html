@@ -1,0 +1,303 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Aksi Glass Blueprint</title>
+  <script src="https://cdn.jsdelivr.net/npm/d3@7"></script>
+  <style>
+    :root {
+      color-scheme: dark;
+      --bg: #0b0f14;
+      --panel: #111821;
+      --ink: #e8eef6;
+      --muted: #8ea0b5;
+      --line: #2f80ed;
+      --stale: #ffb020;
+      --file: #284a63;
+      --folder: #1c3448;
+      --symbol: #477b58;
+      --external: #5d4a2f;
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      overflow: hidden;
+      background: var(--bg);
+      color: var(--ink);
+      font: 13px/1.4 ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+
+    #toolbar {
+      position: fixed;
+      inset: 12px 12px auto 12px;
+      z-index: 2;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      pointer-events: none;
+    }
+
+    #toolbar > div {
+      min-width: 0;
+      padding: 10px 12px;
+      border: 1px solid #263548;
+      border-radius: 8px;
+      background: color-mix(in srgb, var(--panel) 88%, transparent);
+      box-shadow: 0 12px 40px rgba(0, 0, 0, 0.35);
+      pointer-events: auto;
+    }
+
+    #title {
+      font-weight: 700;
+      letter-spacing: 0;
+    }
+
+    #meta {
+      color: var(--muted);
+      white-space: nowrap;
+    }
+
+    #details {
+      position: fixed;
+      right: 12px;
+      bottom: 12px;
+      z-index: 2;
+      width: min(380px, calc(100vw - 24px));
+      max-height: 45vh;
+      overflow: auto;
+      padding: 12px;
+      border: 1px solid #263548;
+      border-radius: 8px;
+      background: color-mix(in srgb, var(--panel) 92%, transparent);
+      box-shadow: 0 12px 40px rgba(0, 0, 0, 0.35);
+    }
+
+    #details h2 {
+      margin: 0 0 6px;
+      font-size: 14px;
+    }
+
+    #details p {
+      margin: 4px 0;
+      color: var(--muted);
+      overflow-wrap: anywhere;
+    }
+
+    svg {
+      width: 100vw;
+      height: 100vh;
+      display: block;
+    }
+
+    .node rect {
+      stroke: #5d7188;
+      stroke-width: 1;
+      fill-opacity: 0.42;
+      cursor: pointer;
+    }
+
+    .node.repo rect { fill: #101924; stroke: #7890aa; }
+    .node.folder rect { fill: var(--folder); }
+    .node.file rect { fill: var(--file); }
+    .node.function rect,
+    .node.class rect,
+    .node.interface rect,
+    .node.struct rect,
+    .node.type rect { fill: var(--symbol); }
+    .node.external rect { fill: var(--external); stroke-dasharray: 4 3; }
+    .node.stale rect { stroke: var(--stale); stroke-width: 2.5; }
+    .node.selected rect { stroke: #b8e0ff; stroke-width: 3; }
+    .node.connected rect { stroke: var(--line); stroke-width: 2.5; }
+
+    .label {
+      fill: var(--ink);
+      pointer-events: none;
+      dominant-baseline: hanging;
+      font-size: 12px;
+    }
+
+    .label.subtle { fill: var(--muted); font-size: 10px; }
+
+    .edge {
+      fill: none;
+      stroke: #496680;
+      stroke-width: 1.2;
+      stroke-opacity: 0.42;
+      pointer-events: none;
+    }
+
+    .edge.active {
+      stroke: var(--line);
+      stroke-width: 2.5;
+      stroke-opacity: 0.95;
+    }
+
+    .symbols-hidden .symbol-label { display: none; }
+  </style>
+</head>
+<body>
+  <div id="toolbar">
+    <div>
+      <div id="title">Aksi Glass Blueprint</div>
+      <div id="meta">Loading architecture.json</div>
+    </div>
+  </div>
+  <div id="details">
+    <h2>No node selected</h2>
+    <p>Click a box to trace imports and inspect metadata.</p>
+  </div>
+  <svg id="canvas" role="img" aria-label="Aksi codebase map"></svg>
+
+  <script>
+    const svg = d3.select("#canvas");
+    const viewport = svg.append("g").attr("class", "viewport symbols-hidden");
+    const edgeLayer = viewport.append("g").attr("class", "edges");
+    const nodeLayer = viewport.append("g").attr("class", "nodes");
+    const meta = document.querySelector("#meta");
+    const details = document.querySelector("#details");
+
+    const width = () => window.innerWidth;
+    const height = () => window.innerHeight;
+
+    function nodeArray(graph) {
+      return Object.values(graph.nodes || {});
+    }
+
+    function buildHierarchy(graph) {
+      const nodes = graph.nodes || {};
+      const root = nodes[graph.root];
+      return d3.hierarchy(root, node => (node.children || []).map(id => nodes[id]).filter(Boolean));
+    }
+
+    function centerOf(box) {
+      return [box.x0 + (box.x1 - box.x0) / 2, box.y0 + (box.y1 - box.y0) / 2];
+    }
+
+    function updateDetails(node, graph) {
+      const edges = (graph.edges || []).filter(edge => edge.source === node.id || edge.target === node.id);
+      const lines = [
+        `<h2>${node.name}</h2>`,
+        `<p>${node.type}${node.language ? " · " + node.language : ""}${node.stale ? " · stale" : ""}</p>`,
+        `<p>${node.path || ""}</p>`,
+      ];
+      if (node.start_line) lines.push(`<p>Lines ${node.start_line}-${node.end_line}</p>`);
+      if (edges.length) lines.push(`<p>${edges.length} connected import edge${edges.length === 1 ? "" : "s"}</p>`);
+      details.innerHTML = lines.join("");
+    }
+
+    function render(graph) {
+      const root = buildHierarchy(graph);
+      const pack = d3.pack().size([width() - 80, height() - 120]).padding(d => d.depth < 2 ? 18 : 6);
+      const packed = pack(root.sum(d => Math.max(1, (d.children || []).length || 1)));
+      packed.each(d => {
+        d.data.x0 = d.x - d.r;
+        d.data.y0 = d.y - d.r;
+        d.data.x1 = d.x + d.r;
+        d.data.y1 = d.y + d.r;
+      });
+
+      const byId = new Map(nodeArray(graph).map(node => [node.id, node]));
+      const packedById = new Map(packed.descendants().map(item => [item.data.id, item.data]));
+      const visibleEdges = (graph.edges || []).filter(edge => packedById.has(edge.source) && packedById.has(edge.target));
+
+      edgeLayer.selectAll("path")
+        .data(visibleEdges, edge => edge.id)
+        .join("path")
+        .attr("class", "edge")
+        .attr("d", edge => {
+          const source = packedById.get(edge.source);
+          const target = packedById.get(edge.target);
+          const [sx, sy] = centerOf(source);
+          const [tx, ty] = centerOf(target);
+          const mx = (sx + tx) / 2;
+          return `M${sx},${sy} C${mx},${sy} ${mx},${ty} ${tx},${ty}`;
+        });
+
+      const node = nodeLayer.selectAll("g.node")
+        .data(packed.descendants(), item => item.data.id)
+        .join(enter => {
+          const group = enter.append("g").attr("class", item => classes(item.data));
+          group.append("rect").attr("rx", 6).attr("ry", 6);
+          group.append("text").attr("class", "label").attr("x", 8).attr("y", 7);
+          group.append("text").attr("class", "label subtle symbol-label").attr("x", 8).attr("y", 23);
+          return group;
+        })
+        .attr("class", item => classes(item.data))
+        .attr("transform", item => `translate(${item.data.x0},${item.data.y0})`);
+
+      node.select("rect")
+        .attr("width", item => Math.max(4, item.data.x1 - item.data.x0))
+        .attr("height", item => Math.max(4, item.data.y1 - item.data.y0));
+
+      node.select("text.label")
+        .text(item => item.data.name)
+        .style("display", item => item.r > 20 ? null : "none");
+
+      node.select("text.subtle")
+        .text(item => item.data.type)
+        .style("display", item => item.r > 32 ? null : "none");
+
+      node.on("click", (event, item) => {
+        event.stopPropagation();
+        selectNode(item.data, graph);
+      });
+
+      svg.on("click", () => selectNode(null, graph));
+
+      const zoom = d3.zoom()
+        .scaleExtent([0.35, 8])
+        .on("zoom", event => {
+          viewport.attr("transform", event.transform);
+          viewport.classed("symbols-hidden", event.transform.k < 1.5);
+        });
+      svg.call(zoom);
+      svg.call(zoom.transform, d3.zoomIdentity.translate(40, 88));
+
+      meta.textContent = `${nodeArray(graph).filter(item => item.type === "file").length} files · ${(graph.edges || []).length} edges · ${graph.scanner?.stale_files || 0} stale`;
+    }
+
+    function classes(node) {
+      const base = ["node", node.type];
+      if (node.stale) base.push("stale");
+      return base.join(" ");
+    }
+
+    function selectNode(selected, graph) {
+      const relatedIds = new Set();
+      if (selected) {
+        for (const edge of graph.edges || []) {
+          if (edge.source === selected.id || edge.target === selected.id) {
+            relatedIds.add(edge.source);
+            relatedIds.add(edge.target);
+          }
+        }
+        updateDetails(selected, graph);
+      } else {
+        details.innerHTML = "<h2>No node selected</h2><p>Click a box to trace imports and inspect metadata.</p>";
+      }
+
+      nodeLayer.selectAll("g.node")
+        .classed("selected", item => selected && item.data.id === selected.id)
+        .classed("connected", item => selected && relatedIds.has(item.data.id) && item.data.id !== selected.id);
+
+      edgeLayer.selectAll("path.edge")
+        .classed("active", edge => selected && (edge.source === selected.id || edge.target === selected.id));
+    }
+
+    fetch("../Files/architecture.json", { cache: "no-store" })
+      .then(response => {
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        return response.json();
+      })
+      .then(render)
+      .catch(error => {
+        meta.textContent = "Could not load ../Files/architecture.json";
+        details.innerHTML = `<h2>Map unavailable</h2><p>${error.message}</p>`;
+      });
+  </script>
+</body>
+</html>

@@ -1,0 +1,85 @@
+# Aksi
+
+Aksi is a local "Glass Blueprint" tool for turning source code into a zoomable architecture map. It scans a repository with Tree-sitter, writes a static `Files/architecture.json`, exposes that map through a FastMCP stdio server, and renders it with a standalone D3 viewer.
+
+The scanner is local-first: no external LLM APIs are used for indexing or relationship discovery.
+
+## Setup
+
+```bash
+python -m venv .venv
+. .venv/bin/activate
+pip install -e ".[dev]"
+```
+
+The current MVP expects:
+
+- `fastmcp`
+- `tree-sitter`
+- `tree-sitter-python`
+- `pytest` for tests
+
+For full Tree-sitter parsing across JavaScript, TypeScript, and other languages, install the optional grammar bundle on a supported Python version:
+
+```bash
+pip install -e ".[multilang]"
+```
+
+The scanner automatically uses `tree-sitter-languages` when it is available. Without it, Python still uses Tree-sitter and JavaScript/TypeScript imports and symbols use conservative text fallbacks.
+
+## Scan a Repository
+
+```bash
+python graph.py /path/to/repo
+```
+
+This writes:
+
+```text
+/path/to/repo/Files/architecture.json
+/path/to/repo/Files/.aksi_cache*
+```
+
+`Files/` is generated output and should stay ignored by git.
+
+## Run the MCP Server
+
+```bash
+python mcp_server.py
+```
+
+Available tools:
+
+- `scan_repo(path: str = ".")`
+- `get_map(path: str = ".")`
+- `get_context(node_id: str, path: str = ".")`
+
+## View the Map
+
+After scanning, serve the repository directory and open the UI:
+
+```bash
+python -m http.server 8000
+```
+
+Then open:
+
+```text
+http://localhost:8000/ui/
+```
+
+The viewer loads `../Files/architecture.json`, draws nested repo/folder/file/symbol boxes, highlights imports on click, and marks stale files when the map says they changed.
+
+## Development
+
+```bash
+pytest
+```
+
+Useful smoke checks:
+
+```bash
+python scanner.py .
+python graph.py .
+python -m py_compile scanner.py graph.py mcp_server.py
+```
