@@ -86,7 +86,7 @@ scripts/setup_mcp.sh --claude-desktop
 
 Available tools:
 
-- `generate_visualization(path: str = ".", summarize: bool = True, llm_provider: str | None = None, llm_model: str | None = None, serve_viewer: bool = True)`
+- `generate_visualization(path: str = ".", summarize: bool = True, serve_viewer: bool = True)`
 - `scan_repo(path: str = ".")`
 - `get_map(path: str = ".")`
 - `get_context(node_id: str, path: str = ".")`
@@ -107,23 +107,31 @@ Normal MCP workflow:
 1. The user asks their LLM host to add or inspect the visualization.
 2. The host calls `generate_visualization`; users do not need to run `aksi.py`.
 3. The host gives the user `viewer_http_url` when present, otherwise `viewer_url`.
-4. The host calls `get_context` for exact source before writing any explanation.
-5. The host writes the summary and calls `save_summary`.
-6. Aksi stores summaries under `Files/context/` with file hashes, so `get_summary` can report stale summaries after source changes.
+4. The response includes `summary_targets` grouped by `structure`, `architecture`, and `runtime`.
+5. For each target where `needs_summary` is `true`, the host calls `get_context` and uses its own LLM to write the summary.
+6. The host calls `save_summary` for each written explanation so the viewer can show it when that rectangle is clicked.
+7. Aksi stores summaries under `Files/context/` with file hashes, so `get_summary` can report stale summaries after source changes.
 
-Direct LLM summaries run after scanning by default:
+Aksi never calls an external LLM directly. It scans, builds the graph, detects stale files, marks unused-code hints, returns summary targets, and writes the UI locally. The connected host LLM owns the language-writing step. To skip summary targets for a local run, use `python aksi.py --no-summarize`.
 
-```bash
-OPENAI_API_KEY=... python aksi.py
+On the first run, the host should summarize every target where `needs_summary` is `true`. On later runs, the host should only summarize targets marked `missing` or `stale`; targets marked `fresh` can be skipped.
+
+`summary_targets` maps to the viewer tabs:
+
+- `structure`: repo, folder, file, and symbol rectangles.
+- `architecture`: detected architecture component rectangles.
+- `runtime`: current runtime-flow file/external rectangles from dependency relationships.
+
+Recommended summary format:
+
+```json
+{
+  "what": "What this rectangle represents.",
+  "why": "Why it exists in the project.",
+  "how": "How it works based on get_context.",
+  "role": "Its role in the current view and surrounding code."
+}
 ```
-
-Or through MCP:
-
-```text
-generate_visualization(path=".", llm_provider="openai")
-```
-
-Aksi still scans, builds the graph, detects stale files, marks unused-code hints, and writes the UI locally. The configured LLM is used only after scanning to write repo and architecture-component summaries, which Aksi stores under `Files/context/`. For tests or dry runs, use `llm_provider="mock"`. To skip summaries for a local run, use `python aksi.py --no-summarize`.
 
 ## View the Map
 

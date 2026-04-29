@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import functools
+import hashlib
 import http.server
 import json
 import socketserver
@@ -15,7 +16,6 @@ from urllib.parse import quote
 from fastmcp import FastMCP
 
 from graph import load_architecture, refresh_stale_flags, slug, summarize_architecture, write_architecture
-from llm_summary import LLMSummaryError, summarize_context
 
 mcp = FastMCP("Aksi")
 _VIEWER_SERVERS: dict[str, tuple[socketserver.TCPServer, int]] = {}
@@ -120,10 +120,46 @@ def _node_and_file(repo: Path, node_id: str) -> tuple[dict[str, Any], dict[str, 
     return architecture, node, _file_node_for(node, nodes)
 
 
-def _summary_stale(record: dict[str, Any], file_node: dict[str, Any]) -> bool:
+def _context_hash_for_node(node: dict[str, Any], nodes: dict[str, dict[str, Any]]) -> str | None:
+    node_type = node.get("type")
+    if node_type == "file":
+        return node.get("hash")
+    if node_type in {"function", "class", "interface", "struct", "type"}:
+        return _file_node_for(node, nodes).get("hash")
+    if node_type == "external":
+        return None
+
+    file_nodes: list[dict[str, Any]]
+    if node_type == "repo":
+        file_nodes = [candidate for candidate in nodes.values() if candidate.get("type") == "file"]
+    elif node_type in {"folder", "component"}:
+        file_nodes = _descendant_file_nodes(node, nodes)
+    else:
+        file_nodes = []
+
+    hashes = sorted(
+        f"{file_node.get('path', '')}:{file_node.get('hash', '')}"
+        for file_node in file_nodes
+        if file_node.get("hash")
+    )
+    if not hashes:
+        return None
+    return hashlib.sha256("\n".join(hashes).encode("utf-8")).hexdigest()
+
+
+def _summary_stale(record: dict[str, Any], node: dict[str, Any], nodes: dict[str, dict[str, Any]]) -> bool:
+    file_node = _file_node_for(node, nodes)
+    if node.get("stale") or file_node.get("stale"):
+        return True
+
+    saved_context_hash = record.get("context_hash")
+    current_context_hash = _context_hash_for_node(node, nodes)
+    if saved_context_hash and current_context_hash:
+        return saved_context_hash != current_context_hash
+
     saved_hash = record.get("file_hash")
     current_hash = file_node.get("hash")
-    return bool(file_node.get("stale")) or bool(saved_hash and current_hash and saved_hash != current_hash)
+    return bool(saved_hash and current_hash and saved_hash != current_hash)
 
 
 def _read_source(repo: Path, relpath: str) -> str:
@@ -185,6 +221,60 @@ def _component_context(
     }
 
 
+def _descendant_file_nodes(node: dict[str, Any], nodes: dict[str, dict[str, Any]]) -> list[dict[str, Any]]:
+    files: list[dict[str, Any]] = []
+    stack = list(node.get("children", []))
+    seen: set[str] = set()
+    while stack:
+        node_id = stack.pop()
+        if node_id in seen:
+            continue
+        seen.add(node_id)
+        child = nodes.get(node_id)
+        if not child:
+            continue
+        if child.get("type") == "file":
+            files.append(child)
+            continue
+        stack.extend(child.get("children", []))
+    return sorted(files, key=lambda item: item.get("path", ""))
+
+
+def _folder_context(
+    repo: Path,
+    architecture: dict[str, Any],
+    node: dict[str, Any],
+    nodes: dict[str, dict[str, Any]],
+) -> dict[str, Any]:
+    files = _descendant_file_nodes(node, nodes)
+    sources = [{"path": file_node.get("path"), "source": _read_source(repo, file_node.get("path", ""))} for file_node in files[:12]]
+    source = "\n\n".join(f"# {item['path']}\n{item['source']}" for item in sources if item.get("path"))
+    file_ids = {file_node.get("id") for file_node in files}
+    file_edges = [
+        edge
+        for edge in architecture.get("edges", [])
+        if edge.get("source") in file_ids or edge.get("target") in file_ids
+    ]
+    symbols = [
+        nodes[child]
+        for file_node in files
+        for child in file_node.get("children", [])
+        if child in nodes
+    ]
+    saved_summary = get_summary(node["id"], str(repo))
+    return {
+        "node": node,
+        "file": node,
+        "source": source,
+        "sources": sources,
+        "symbols": symbols,
+        "edges": [],
+        "file_edges": file_edges,
+        "neighbors": files,
+        "saved_summary": None if saved_summary.get("missing") else saved_summary,
+    }
+
+
 def _repo_context(
     repo: Path,
     architecture: dict[str, Any],
@@ -213,16 +303,20 @@ def _repo_context(
 def _read_summary_record(repo: Path, node_id: str) -> dict[str, Any] | None:
     path = _summary_path(repo, node_id)
     record = _read_json(path, None)
-    if not isinstance(record, dict):
+    if isinstance(record, dict):
+        return record
+
+    index = _read_json(_summary_index_path(repo), {})
+    indexed_record = (index.get("summaries") or {}).get(node_id)
+    if not isinstance(indexed_record, dict):
         return None
-    return record
+    indexed_record["node_id"] = indexed_record.get("node_id") or node_id
+    return indexed_record
 
 
-def _write_summary_index(repo: Path) -> None:
+def _summary_records_from_disk(repo: Path) -> dict[str, Any]:
     context_dir = _context_dir(repo)
     records: dict[str, Any] = {}
-    architecture = refresh_stale_flags(load_architecture(repo), repo)
-    nodes = architecture.get("nodes", {})
     old_index = _read_json(_summary_index_path(repo), {})
 
     for node_id, record in (old_index.get("summaries") or {}).items():
@@ -239,18 +333,23 @@ def _write_summary_index(repo: Path) -> None:
         node_id = record.get("node_id")
         if not node_id:
             continue
-        if node_id in nodes:
-            file_node = _file_node_for(nodes[node_id], nodes)
-            record["stale"] = _summary_stale(record, file_node)
-        else:
-            record["stale"] = True
-            record["missing_node"] = True
         records[node_id] = record
+    return records
+
+
+def _write_summary_index(repo: Path, seed_records: dict[str, Any] | None = None) -> None:
+    records = {
+        node_id: record
+        for node_id, record in (seed_records or {}).items()
+        if isinstance(record, dict) and record.get("summary") is not None
+    }
+    records.update(_summary_records_from_disk(repo))
+    architecture = refresh_stale_flags(load_architecture(repo), repo)
+    nodes = architecture.get("nodes", {})
 
     for node_id, record in records.items():
         if node_id in nodes:
-            file_node = _file_node_for(nodes[node_id], nodes)
-            record["stale"] = _summary_stale(record, file_node)
+            record["stale"] = _summary_stale(record, nodes[node_id], nodes)
             record.pop("missing_node", None)
         else:
             record["stale"] = True
@@ -269,12 +368,6 @@ def _write_summary_index(repo: Path) -> None:
     )
 
 
-def _architecture_summary_node_ids(architecture: dict[str, Any]) -> list[str]:
-    node_ids = [architecture.get("root")]
-    node_ids.extend(component.get("id") for component in architecture.get("components", []))
-    return [node_id for node_id in node_ids if isinstance(node_id, str)]
-
-
 def _save_summary_record(repo: Path, node_id: str, summary: Any, written_by: str) -> dict[str, Any]:
     _architecture, node, file_node = _node_and_file(repo, node_id)
     existing = _read_summary_record(repo, node_id) or {}
@@ -285,6 +378,7 @@ def _save_summary_record(repo: Path, node_id: str, summary: Any, written_by: str
         "type": node.get("type"),
         "path": node.get("path"),
         "file_hash": file_node.get("hash"),
+        "context_hash": _context_hash_for_node(node, _architecture.get("nodes", {})),
         "summary": summary,
         "created_at": existing.get("created_at", now),
         "updated_at": now,
@@ -296,34 +390,103 @@ def _save_summary_record(repo: Path, node_id: str, summary: Any, written_by: str
     return {"saved": True, "summary_file": str(output_path), "record": record}
 
 
-def _summarize_architecture_nodes(
-    repo: Path,
-    architecture: dict[str, Any],
-    provider: str | None,
-    model: str | None,
+def _target_record(
+    node: dict[str, Any],
+    view: str,
+    reason: str,
+    priority: int,
+    records: dict[str, Any],
 ) -> dict[str, Any]:
-    saved: list[str] = []
-    errors: list[dict[str, str]] = []
-    for node_id in _architecture_summary_node_ids(architecture):
-        context = get_context(node_id, str(repo))
-        if context.get("error"):
-            errors.append({"node_id": node_id, "error": context["error"]})
-            continue
-        try:
-            summary = summarize_context(context, provider=provider, model=model)
-            _save_summary_record(repo, node_id, summary, "aksi_llm")
-            saved.append(node_id)
-        except (LLMSummaryError, OSError, KeyError, TypeError, ValueError) as error:
-            errors.append({"node_id": node_id, "error": str(error)})
-
-    _write_summary_index(repo)
+    record = records.get(node.get("id"))
+    status = "missing"
+    if record:
+        status = "stale" if record.get("stale") else "fresh"
     return {
-        "requested": True,
-        "saved": saved,
-        "errors": errors,
-        "provider": provider or "openai",
-        "model": model,
+        "node_id": node.get("id"),
+        "name": node.get("name"),
+        "type": node.get("type"),
+        "path": node.get("path"),
+        "view": view,
+        "reason": reason,
+        "priority": priority,
+        "summary_status": status,
+        "needs_summary": status in {"missing", "stale"},
+        "action": "write" if status == "missing" else "refresh" if status == "stale" else "skip",
     }
+
+
+def _structure_summary_targets(architecture: dict[str, Any], records: dict[str, Any]) -> list[dict[str, Any]]:
+    nodes = architecture.get("nodes", {})
+    targets: list[dict[str, Any]] = []
+    root = nodes.get(architecture.get("root", ""))
+    if root:
+        targets.append(_target_record(root, "structure", "repo structure summary", 0, records))
+
+    priority_by_type = {
+        "folder": 20,
+        "file": 30,
+        "class": 40,
+        "interface": 40,
+        "struct": 40,
+        "type": 40,
+        "function": 50,
+    }
+    for node in sorted(nodes.values(), key=lambda item: (item.get("path", ""), item.get("name", ""))):
+        node_type = node.get("type")
+        if node_type not in priority_by_type:
+            continue
+        reason = f"{node_type} structure summary"
+        if node.get("unused"):
+            reason = f"possibly unused {node_type} summary"
+        if node.get("stale"):
+            reason = f"stale {node_type} summary"
+        targets.append(_target_record(node, "structure", reason, priority_by_type[node_type], records))
+    return targets
+
+
+def _architecture_summary_targets(architecture: dict[str, Any], records: dict[str, Any]) -> list[dict[str, Any]]:
+    nodes = architecture.get("nodes", {})
+    targets: list[dict[str, Any]] = []
+    for component in architecture.get("components", []):
+        node = nodes.get(component.get("id"))
+        if not node:
+            continue
+        targets.append(_target_record(node, "architecture", "architecture component summary", 10, records))
+    return targets
+
+
+def _runtime_summary_targets(architecture: dict[str, Any], records: dict[str, Any]) -> list[dict[str, Any]]:
+    nodes = architecture.get("nodes", {})
+    runtime_ids = {
+        node.get("id")
+        for node in nodes.values()
+        if node.get("type") == "file"
+    }
+    runtime_ids.update(
+        endpoint
+        for edge in architecture.get("edges", [])
+        for endpoint in (edge.get("source"), edge.get("target"))
+        if endpoint in nodes and nodes[endpoint].get("type") == "external"
+    )
+    targets: list[dict[str, Any]] = []
+    for node_id in sorted(runtime_ids):
+        node = nodes[node_id]
+        reason = "runtime dependency endpoint" if node.get("type") == "external" else "runtime flow module"
+        targets.append(_target_record(node, "runtime", reason, 20 if node.get("type") == "file" else 60, records))
+    return targets
+
+
+def _summary_targets(repo: Path, architecture: dict[str, Any]) -> dict[str, list[dict[str, Any]]]:
+    records = (_read_json(_summary_index_path(repo), {}).get("summaries") or {})
+    return {
+        "structure": _structure_summary_targets(architecture, records),
+        "architecture": _architecture_summary_targets(architecture, records),
+        "runtime": _runtime_summary_targets(architecture, records),
+    }
+
+
+def _empty_summary_targets() -> dict[str, list[dict[str, Any]]]:
+    return {"structure": [], "architecture": [], "runtime": []}
 
 
 @mcp.tool
@@ -343,18 +506,15 @@ def scan_repo(path: str = ".") -> dict[str, Any]:
 def generate_visualization(
     path: str = ".",
     summarize: bool = True,
-    llm_provider: str | None = None,
-    llm_model: str | None = None,
     serve_viewer: bool = True,
 ) -> dict[str, Any]:
     """Generate the architecture map for UI/MCP use without requiring users to run aksi.py."""
     repo = _repo(path)
+    preserved_summary_records = _summary_records_from_disk(repo)
     result = scan_repo(str(repo))
+    _write_summary_index(repo, preserved_summary_records)
     architecture = refresh_stale_flags(load_architecture(repo), repo)
-    llm_summary = {"requested": False}
-    if summarize:
-        llm_summary = _summarize_architecture_nodes(repo, architecture, llm_provider, llm_model)
-        architecture = refresh_stale_flags(load_architecture(repo), repo)
+    summary_targets = _summary_targets(repo, architecture) if summarize else _empty_summary_targets()
     viewer_file = _write_static_viewer(repo, architecture)
     viewer_http_url = None
     viewer_http_error = None
@@ -370,12 +530,13 @@ def generate_visualization(
         "viewer_http_url": viewer_http_url,
         "viewer_http_error": viewer_http_error,
         "summary_index_file": str(_summary_index_path(repo)),
-        "llm_summary": llm_summary,
+        "summary_targets": summary_targets,
+        "summary_mode": "host_llm" if summarize else "disabled",
         "next_steps": [
             "Give the user viewer_http_url when present; otherwise give viewer_url.",
             "Call get_map to inspect the generated graph.",
-            "If LLM summaries failed or need refinement, call get_context before writing a replacement summary.",
-            "Call save_summary to persist any host-written explanation for future use.",
+            "For each summary target where needs_summary is true, call get_context and use the host LLM to write the explanation.",
+            "Call save_summary for each written explanation so the viewer can show it on rectangle click.",
         ],
     }
 
@@ -401,6 +562,9 @@ def get_context(node_id: str, path: str = ".") -> dict[str, Any]:
 
     if node.get("type") == "repo":
         return _repo_context(repo, architecture, node, nodes)
+
+    if node.get("type") == "folder":
+        return _folder_context(repo, architecture, node, nodes)
 
     if node.get("type") == "component":
         return _component_context(repo, architecture, node, nodes)
@@ -462,11 +626,11 @@ def get_summary(node_id: str, path: str = ".") -> dict[str, Any]:
         return {"missing": True, "node_id": node_id}
 
     try:
-        _architecture, _node, file_node = _node_and_file(repo, node_id)
+        _architecture, _node, _file_node = _node_and_file(repo, node_id)
     except KeyError:
         return {**record, "stale": True, "missing_node": True}
 
-    record["stale"] = _summary_stale(record, file_node)
+    record["stale"] = _summary_stale(record, _node, _architecture.get("nodes", {}))
     return record
 
 
@@ -475,6 +639,7 @@ def list_summaries(path: str = ".") -> dict[str, Any]:
     """List saved summaries for the repository."""
     repo = _repo(path)
     _write_summary_index(repo)
+    _write_static_viewer(repo, refresh_stale_flags(load_architecture(repo), repo))
     index_path = _summary_index_path(repo)
     return json.loads(index_path.read_text(encoding="utf-8"))
 

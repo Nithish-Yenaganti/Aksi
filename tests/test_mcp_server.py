@@ -17,7 +17,12 @@ def test_mcp_helpers_return_expected_shapes(tmp_path: Path) -> None:
     assert scan_summary["viewer_url"].startswith("file://")
     assert "viewer_http_url" in scan_summary
     assert "viewer_http_error" in scan_summary
-    assert scan_summary["llm_summary"]["requested"] is True
+    assert scan_summary["summary_mode"] == "host_llm"
+    root_target = next(target for target in scan_summary["summary_targets"]["structure"] if target["node_id"] == graph["root"])
+    file_target = next(target for target in scan_summary["summary_targets"]["structure"] if target["node_id"] == file_node["id"])
+    assert root_target["needs_summary"] is True
+    assert root_target["action"] == "write"
+    assert file_target["summary_status"] == "missing"
     assert Path(scan_summary["viewer_file"]).exists()
     assert "__AKSI_ARCHITECTURE__" in Path(scan_summary["viewer_file"]).read_text(encoding="utf-8")
     assert scan_summary["summary_index_file"].endswith("Files/context/index.json")
@@ -98,9 +103,34 @@ def test_generate_visualization_preserves_index_only_summaries(tmp_path: Path) -
 
     mcp_server.generate_visualization(str(tmp_path))
     listed = mcp_server.list_summaries(str(tmp_path))
+    loaded = mcp_server.get_summary(file_node["id"], str(tmp_path))
+    context = mcp_server.get_context(file_node["id"], str(tmp_path))
+    viewer = (tmp_path / "Files" / "index.html").read_text(encoding="utf-8")
 
     assert listed["summaries"][file_node["id"]]["summary"] == "index-only summary"
     assert listed["summaries"][file_node["id"]]["stale"] is False
+    assert loaded["summary"] == "index-only summary"
+    assert context["saved_summary"]["summary"] == "index-only summary"
+    assert "index-only summary" in viewer
+
+
+def test_generate_visualization_preserves_saved_summaries_during_refresh(tmp_path: Path) -> None:
+    (tmp_path / "app.py").write_text("def run():\n    return 1\n", encoding="utf-8")
+    first = mcp_server.generate_visualization(str(tmp_path))
+    target_ids = [
+        target["node_id"]
+        for targets in first["summary_targets"].values()
+        for target in targets
+        if target["type"] in {"repo", "file", "function"}
+    ][:3]
+    for node_id in target_ids:
+        mcp_server.save_summary(node_id, {"what": f"summary for {node_id}"}, str(tmp_path))
+
+    mcp_server.generate_visualization(str(tmp_path))
+    listed = mcp_server.list_summaries(str(tmp_path))
+
+    assert set(target_ids).issubset(listed["summaries"])
+    assert all(listed["summaries"][node_id]["stale"] is False for node_id in target_ids)
 
 
 def test_mcp_returns_context_for_architecture_components(tmp_path: Path) -> None:
@@ -122,17 +152,71 @@ def test_mcp_returns_context_for_architecture_components(tmp_path: Path) -> None
     assert listed["summaries"][component["id"]]["summary"] == "This component exposes the MCP entrypoint."
 
 
-def test_generate_visualization_uses_mock_llm_summaries(tmp_path: Path) -> None:
+def test_generate_visualization_returns_host_llm_summary_targets(tmp_path: Path) -> None:
     (tmp_path / "mcp_server.py").write_text("def serve():\n    return True\n", encoding="utf-8")
     (tmp_path / "graph.py").write_text("def build():\n    return 1\n", encoding="utf-8")
 
-    result = mcp_server.generate_visualization(str(tmp_path), llm_provider="mock")
-    listed = mcp_server.list_summaries(str(tmp_path))
+    result = mcp_server.generate_visualization(str(tmp_path))
     graph = mcp_server.get_map(str(tmp_path))
     component_ids = {component["id"] for component in graph["components"]}
+    structure_ids = {target["node_id"] for target in result["summary_targets"]["structure"]}
+    architecture_ids = {target["node_id"] for target in result["summary_targets"]["architecture"]}
+    runtime_ids = {target["node_id"] for target in result["summary_targets"]["runtime"]}
 
-    assert result["llm_summary"]["requested"] is True
-    assert not result["llm_summary"]["errors"]
-    assert graph["root"] in listed["summaries"]
-    assert component_ids.issubset(set(listed["summaries"]))
-    assert Path(result["viewer_file"]).read_text(encoding="utf-8").count("aksi_llm") >= len(component_ids)
+    assert result["summary_mode"] == "host_llm"
+    assert graph["root"] in structure_ids
+    assert component_ids.issubset(architecture_ids)
+    assert "file:mcp_server.py" in runtime_ids
+    assert "file:graph.py" in runtime_ids
+    assert "save_summary" in " ".join(result["next_steps"])
+
+
+def test_generate_visualization_can_disable_summary_targets(tmp_path: Path) -> None:
+    (tmp_path / "app.py").write_text("def run():\n    return 1\n", encoding="utf-8")
+
+    result = mcp_server.generate_visualization(str(tmp_path), summarize=False)
+
+    assert result["summary_mode"] == "disabled"
+    assert result["summary_targets"] == {"structure": [], "architecture": [], "runtime": []}
+
+
+def test_summary_targets_skip_fresh_and_refresh_changed_nodes(tmp_path: Path) -> None:
+    source = tmp_path / "app.py"
+    source.write_text("def run():\n    return 1\n", encoding="utf-8")
+
+    first = mcp_server.generate_visualization(str(tmp_path))
+    file_target = next(target for target in first["summary_targets"]["structure"] if target["type"] == "file")
+    assert file_target["summary_status"] == "missing"
+
+    mcp_server.save_summary(file_target["node_id"], {"what": "app module"}, str(tmp_path))
+    second = mcp_server.generate_visualization(str(tmp_path))
+    fresh_target = next(
+        target for target in second["summary_targets"]["structure"] if target["node_id"] == file_target["node_id"]
+    )
+    assert fresh_target["summary_status"] == "fresh"
+    assert fresh_target["needs_summary"] is False
+    assert fresh_target["action"] == "skip"
+
+    source.write_text("def run():\n    return 2\n", encoding="utf-8")
+    third = mcp_server.generate_visualization(str(tmp_path))
+    stale_target = next(
+        target for target in third["summary_targets"]["structure"] if target["node_id"] == file_target["node_id"]
+    )
+    assert stale_target["summary_status"] == "stale"
+    assert stale_target["needs_summary"] is True
+    assert stale_target["action"] == "refresh"
+
+
+def test_get_context_for_folder_returns_child_file_sources(tmp_path: Path) -> None:
+    package = tmp_path / "pkg"
+    package.mkdir()
+    (package / "app.py").write_text("def run():\n    return 1\n", encoding="utf-8")
+
+    mcp_server.generate_visualization(str(tmp_path))
+    graph = mcp_server.get_map(str(tmp_path))
+    folder_node = next(node for node in graph["nodes"].values() if node["type"] == "folder")
+    context = mcp_server.get_context(folder_node["id"], str(tmp_path))
+
+    assert context["node"]["type"] == "folder"
+    assert context["sources"][0]["path"] == "pkg/app.py"
+    assert "def run" in context["source"]

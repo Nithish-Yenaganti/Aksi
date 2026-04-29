@@ -20,7 +20,7 @@ Do not ask the user to run `aksi.py` manually when MCP tools are available.
 
 ## Summary Flow
 
-`generate_visualization` scans first, then writes summaries.
+`generate_visualization` scans first, then returns summary targets for the host LLM.
 
 Default behavior:
 
@@ -28,15 +28,30 @@ Default behavior:
 scan repo locally
 build graph locally
 detect architecture components locally
-optionally call configured LLM for repo/component summaries
-save summaries in Files/context/
+return summary targets grouped by structure, architecture, and runtime
+host LLM calls get_context for each target where needs_summary is true
+host LLM writes summaries
+host calls save_summary
 write Files/index.html
 return viewer URL
 ```
 
-The LLM may only write natural-language summaries after Aksi has produced local context. The LLM must not decide source structure.
+The LLM may only write natural-language summaries after Aksi has produced local context. The LLM must not decide source structure, architecture candidates, or runtime-flow candidates.
 
-If no LLM provider or API key is configured, Aksi still generates the graph and viewer. Summary failures are returned in `llm_summary.errors`.
+On the first run, summarize every target whose `needs_summary` is true. On later runs, summarize only targets whose `summary_status` is `missing` or `stale`; skip targets marked `fresh`. Save each summary immediately with `save_summary` so the next generated viewer can show it when that rectangle is clicked.
+
+Preferred saved summary shape:
+
+```json
+{
+  "what": "What this rectangle represents.",
+  "why": "Why it exists in the project.",
+  "how": "How it works using the exact context returned by get_context.",
+  "role": "Its role in this view and in the surrounding codebase."
+}
+```
+
+Keep summaries concise, grounded in `get_context`, and avoid guessing behavior that is not visible in the returned source/context.
 
 ## Generated Output
 
@@ -53,7 +68,6 @@ Do not commit `Files/`.
 
 - `scanner.py`: walks the repo, hashes files, extracts symbols, and extracts imports.
 - `graph.py`: builds `architecture.json`, tree nodes, dependency edges, stale flags, unused-code hints, and architecture components.
-- `llm_summary.py`: optional LLM summary provider used only after scanning.
 - `mcp_server.py`: FastMCP stdio server and agent-facing tools.
 - `aksi.py`: one-command local runner that generates and serves `Files/index.html`.
 - `ui/index.html`: static viewer template copied into generated output.
@@ -61,13 +75,31 @@ Do not commit `Files/`.
 
 ## MCP Tools
 
-- `generate_visualization(path=".", summarize=True, llm_provider=None, llm_model=None, serve_viewer=True)`
+- `generate_visualization(path=".", summarize=True, serve_viewer=True)`
 - `scan_repo(path=".")`
 - `get_map(path=".")`
 - `get_context(node_id, path=".")`
 - `save_summary(node_id, summary, path=".")`
 - `get_summary(node_id, path=".")`
 - `list_summaries(path=".")`
+
+`summary_targets` is view-keyed:
+
+```text
+structure: repo, folder, file, and symbol rectangles
+architecture: architecture component rectangles
+runtime: current runtime-flow file/external rectangles
+```
+
+Each target includes `summary_status`, `needs_summary`, and `action`:
+
+```text
+missing -> write
+stale -> refresh
+fresh -> skip
+```
+
+Runtime targets currently reflect the dependency-flow projection. A future runtime model may introduce dedicated `runtime:*` node IDs.
 
 ## CLI
 
@@ -94,6 +126,6 @@ python aksi.py --test
 Before finishing implementation work, run:
 
 ```bash
-.venv/bin/python -m py_compile scanner.py graph.py mcp_server.py aksi.py llm_summary.py
+.venv/bin/python -m py_compile scanner.py graph.py mcp_server.py aksi.py
 .venv/bin/python -m pytest
 ```

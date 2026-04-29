@@ -37,20 +37,17 @@ def run_tests() -> int:
 def scan(
     repo: Path,
     summarize: bool = True,
-    llm_provider: str | None = None,
-    llm_model: str | None = None,
 ) -> dict[str, Any]:
     result = generate_visualization(
         str(repo),
         summarize=summarize,
-        llm_provider=llm_provider,
-        llm_model=llm_model,
         serve_viewer=False,
     )
     return {
         **result["summary"],
         "viewer_url": result.get("viewer_url"),
-        "llm_summary": result.get("llm_summary"),
+        "summary_targets": result.get("summary_targets"),
+        "summary_mode": result.get("summary_mode"),
     }
 
 
@@ -70,9 +67,7 @@ def main() -> None:
     parser.add_argument("path", nargs="?", default=".", help="Repository path to scan and serve.")
     parser.add_argument("--port", type=int, default=8000, help="Preferred local HTTP port.")
     parser.add_argument("--scan-only", action="store_true", help="Generate Files/architecture.json without serving the UI.")
-    parser.add_argument("--no-summarize", action="store_true", help="Skip LLM architecture summaries.")
-    parser.add_argument("--llm-provider", default=None, help="LLM provider for architecture summaries, for example openai or mock.")
-    parser.add_argument("--llm-model", default=None, help="Model name for architecture summaries.")
+    parser.add_argument("--no-summarize", action="store_true", help="Do not return host-LLM summary targets.")
     parser.add_argument("--test", action="store_true", help="Run the test suite and exit.")
     args = parser.parse_args()
 
@@ -80,7 +75,7 @@ def main() -> None:
         raise SystemExit(run_tests())
 
     repo = Path(args.path).expanduser().resolve()
-    summary = scan(repo, summarize=not args.no_summarize, llm_provider=args.llm_provider, llm_model=args.llm_model)
+    summary = scan(repo, summarize=not args.no_summarize)
     print(json.dumps(summary, indent=2))
 
     if args.scan_only:
