@@ -1208,29 +1208,38 @@
       button.addEventListener("click", () => setViewMode(button.dataset.view));
     });
 
-    fetch("../Files/architecture.json", { cache: "no-store" })
-      .then(async response => {
-        if (!response.ok) throw new Error(`HTTP ${response.status}`);
-        const graph = await response.json();
-        try {
-          const summaries = await fetch("../Files/context/index.json", { cache: "no-store" });
-          if (summaries.ok) {
-            const payload = await summaries.json();
-            summaryIndex = payload.summaries || {};
+    function boot(graph, summaries = {}) {
+      summaryIndex = summaries.summaries || {};
+      currentGraph = graph;
+      render(graph);
+    }
+
+    if (window.__AKSI_ARCHITECTURE__) {
+      boot(window.__AKSI_ARCHITECTURE__, window.__AKSI_SUMMARIES__ || {});
+    } else {
+      fetch("../Files/architecture.json", { cache: "no-store" })
+        .then(async response => {
+          if (!response.ok) throw new Error(`HTTP ${response.status}`);
+          const graph = await response.json();
+          let summariesPayload = {};
+          try {
+            const summaries = await fetch("../Files/context/index.json", { cache: "no-store" });
+            if (summaries.ok) {
+              summariesPayload = await summaries.json();
+            }
+          } catch (_error) {
+            summariesPayload = {};
           }
-        } catch (_error) {
-          summaryIndex = {};
-        }
-        return graph;
-      })
-      .then(graph => {
-        currentGraph = graph;
-        render(graph);
-      })
-      .catch(error => {
-        meta.textContent = "Could not load ../Files/architecture.json";
-        details.innerHTML = `<h2>Map unavailable</h2><p>${error.message}</p>`;
-      });
+          return { graph, summariesPayload };
+        })
+        .then(({ graph, summariesPayload }) => {
+          boot(graph, summariesPayload);
+        })
+        .catch(error => {
+          meta.textContent = "Could not load ../Files/architecture.json";
+          details.innerHTML = `<h2>Map unavailable</h2><p>${error.message}</p>`;
+        });
+    }
 
     window.addEventListener("resize", () => {
       if (currentGraph) render(currentGraph);

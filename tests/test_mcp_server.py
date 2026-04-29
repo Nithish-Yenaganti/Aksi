@@ -12,6 +12,10 @@ def test_mcp_helpers_return_expected_shapes(tmp_path: Path) -> None:
     context = mcp_server.get_context(file_node["id"], str(tmp_path))
 
     assert scan_summary["summary"]["files"] == 1
+    assert scan_summary["viewer_file"].endswith("Files/index.html")
+    assert scan_summary["viewer_url"].startswith("file://")
+    assert Path(scan_summary["viewer_file"]).exists()
+    assert "__AKSI_ARCHITECTURE__" in Path(scan_summary["viewer_file"]).read_text(encoding="utf-8")
     assert scan_summary["summary_index_file"].endswith("Files/context/index.json")
     assert graph["root"] == "repo:."
     assert "def run" in context["source"]

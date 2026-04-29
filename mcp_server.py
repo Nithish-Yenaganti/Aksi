@@ -14,6 +14,10 @@ from graph import load_architecture, refresh_stale_flags, slug, summarize_archit
 mcp = FastMCP("Aksi")
 
 
+def _aksi_root() -> Path:
+    return Path(__file__).resolve().parent
+
+
 def _repo(path: str = ".") -> Path:
     return Path(path).expanduser().resolve()
 
@@ -32,8 +36,34 @@ def _summary_index_path(repo: Path) -> Path:
     return _context_dir(repo) / "index.json"
 
 
+def _viewer_path(repo: Path) -> Path:
+    return repo / "Files" / "index.html"
+
+
 def _utc_now() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+def _read_json(path: Path, fallback: Any) -> Any:
+    if not path.exists():
+        return fallback
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def _write_static_viewer(repo: Path, architecture: dict[str, Any]) -> Path:
+    ui_source = (_aksi_root() / "ui" / "index.html").read_text(encoding="utf-8")
+    summaries = _read_json(_summary_index_path(repo), {"summaries": {}})
+    embedded = (
+        "  <script>\n"
+        f"    window.__AKSI_ARCHITECTURE__ = {json.dumps(architecture)};\n"
+        f"    window.__AKSI_SUMMARIES__ = {json.dumps(summaries)};\n"
+        "  </script>\n"
+    )
+    viewer = ui_source.replace("  <script>\n    const svg = d3.select", f"{embedded}  <script>\n    const svg = d3.select", 1)
+    output_path = _viewer_path(repo)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    output_path.write_text(viewer, encoding="utf-8")
+    return output_path
 
 
 def _file_node_for(node: dict[str, Any], nodes: dict[str, dict[str, Any]]) -> dict[str, Any]:
@@ -98,12 +128,13 @@ def _write_summary_index(repo: Path) -> None:
 @mcp.tool
 def scan_repo(path: str = ".") -> dict[str, Any]:
     """Scan a repository and write Files/architecture.json."""
-    architecture = write_architecture(_repo(path))
-    _write_summary_index(_repo(path))
+    repo = _repo(path)
+    architecture = write_architecture(repo)
+    _write_summary_index(repo)
     return {
-        "path": str(_repo(path)),
+        "path": str(repo),
         "summary": summarize_architecture(architecture),
-        "architecture_file": str(_repo(path) / "Files" / "architecture.json"),
+        "architecture_file": str(repo / "Files" / "architecture.json"),
     }
 
 
@@ -112,11 +143,15 @@ def generate_visualization(path: str = ".") -> dict[str, Any]:
     """Generate the architecture map for UI/MCP use without requiring users to run aksi.py."""
     repo = _repo(path)
     result = scan_repo(str(repo))
+    architecture = refresh_stale_flags(load_architecture(repo), repo)
+    viewer_file = _write_static_viewer(repo, architecture)
     return {
         **result,
-        "ui_file": str(repo / "ui" / "index.html"),
+        "viewer_file": str(viewer_file),
+        "viewer_url": viewer_file.as_uri(),
         "summary_index_file": str(_summary_index_path(repo)),
         "next_steps": [
+            "Give the user viewer_url so they can open the ready visualization.",
             "Call get_map to inspect the generated graph.",
             "Call get_context for exact source before writing an LLM summary.",
             "Call save_summary to persist the LLM-written explanation for future use.",
