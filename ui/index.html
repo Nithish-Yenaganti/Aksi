@@ -3,21 +3,22 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Aksi Glass Blueprint</title>
+  <title>Aksi - Blueprint</title>
   <script src="https://cdn.jsdelivr.net/npm/d3@7"></script>
   <style>
     :root {
       color-scheme: dark;
-      --bg: #201d31;
-      --panel: #141222;
-      --ink: #e8eef6;
-      --muted: #b7b0c9;
-      --line: #6d57d9;
-      --stale: #ffb020;
-      --file: #151326;
-      --folder: #151326;
-      --symbol: #151326;
-      --external: #151326;
+      --bg: #075057;
+      --panel: #053941;
+      --ink: #d2ecf2;
+      --muted: #a8ccd3;
+      --line: #8bcfd7;
+      --stale: #ffd36a;
+      --unused: #ff7f73;
+      --file: #063f47;
+      --folder: #064a53;
+      --symbol: #052f36;
+      --external: #082f35;
     }
 
     * { box-sizing: border-box; }
@@ -26,9 +27,9 @@
       margin: 0;
       overflow: hidden;
       background:
-        radial-gradient(circle at 18% 20%, rgba(86, 73, 156, 0.16), transparent 32%),
-        radial-gradient(circle at 82% 76%, rgba(78, 66, 137, 0.14), transparent 36%),
-        var(--bg);
+        radial-gradient(circle at 24% 14%, rgba(210, 236, 242, 0.14), transparent 30%),
+        radial-gradient(circle at 78% 84%, rgba(210, 236, 242, 0.72), transparent 34%),
+        linear-gradient(180deg, #09606d 0%, #075057 48%, #d2ecf2 148%);
       color: var(--ink);
       font: 16px/1.35 ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
     }
@@ -47,20 +48,42 @@
     #toolbar > div {
       min-width: 0;
       padding: 10px 12px;
-      border: 1px solid #263548;
+      border: 1px solid rgba(210, 236, 242, 0.24);
       border-radius: 8px;
       background: color-mix(in srgb, var(--panel) 88%, transparent);
-      box-shadow: 0 12px 40px rgba(0, 0, 0, 0.35);
+      box-shadow: 0 12px 40px rgba(2, 36, 42, 0.4);
       pointer-events: auto;
     }
 
-    #title {
+    #toolName {
       font-weight: 700;
       letter-spacing: 0;
+      white-space: nowrap;
+    }
+
+    #repoName {
+      max-width: min(420px, calc(100vw - 180px));
+      color: var(--muted);
+      font-weight: 700;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
     }
 
     #meta {
+      position: fixed;
+      left: 12px;
+      bottom: 12px;
+      z-index: 2;
+      max-width: min(760px, calc(100vw - 24px));
+      padding: 10px 12px;
+      border: 1px solid rgba(210, 236, 242, 0.24);
+      border-radius: 8px;
+      background: color-mix(in srgb, var(--panel) 88%, transparent);
+      box-shadow: 0 12px 40px rgba(2, 36, 42, 0.4);
       color: var(--muted);
+      overflow: hidden;
+      text-overflow: ellipsis;
       white-space: nowrap;
     }
 
@@ -83,8 +106,8 @@
     }
 
     #viewModes button.active {
-      border-color: #5f5480;
-      background: #221f36;
+      border-color: rgba(210, 236, 242, 0.4);
+      background: #075057;
       color: var(--ink);
     }
 
@@ -98,10 +121,10 @@
       max-height: 45vh;
       overflow: auto;
       padding: 12px;
-      border: 1px solid #263548;
+      border: 1px solid rgba(210, 236, 242, 0.24);
       border-radius: 8px;
       background: color-mix(in srgb, var(--panel) 92%, transparent);
-      box-shadow: 0 12px 40px rgba(0, 0, 0, 0.35);
+      box-shadow: 0 12px 40px rgba(2, 36, 42, 0.42);
     }
 
     #details.open {
@@ -134,14 +157,14 @@
     }
 
     .node rect {
-      stroke: #4b4564;
+      stroke: rgba(210, 236, 242, 0.28);
       stroke-width: 1.15;
       fill-opacity: 0.96;
       cursor: pointer;
-      filter: drop-shadow(0 0 9px rgba(205, 198, 232, 0.24));
+      filter: drop-shadow(0 0 9px rgba(210, 236, 242, 0.18));
     }
 
-    .node.repo rect { fill: #171529; stroke: #8377b5; }
+    .node.repo rect { fill: #06464f; stroke: #d2ecf2; }
     .node.folder rect { fill: var(--folder); }
     .node.file rect { fill: var(--file); }
     .node.function rect,
@@ -150,13 +173,19 @@
     .node.struct rect,
     .node.type rect { fill: var(--symbol); }
     .node.external rect { fill: var(--external); stroke-dasharray: 4 3; }
-    .node.input rect { fill: #1d1730; stroke: #8f82d8; }
-    .node.process rect { fill: #151326; stroke: #7068a4; }
-    .node.artifact rect { fill: #162437; stroke: #63b8e8; }
-    .node.consumer rect { fill: #173027; stroke: #55c9a2; }
+    .node.input rect { fill: #06464f; stroke: #d2ecf2; }
+    .node.process rect { fill: #053941; stroke: #8bcfd7; }
+    .node.artifact rect { fill: #075057; stroke: #b9e0e7; }
+    .node.consumer rect { fill: #0a6068; stroke: #d2ecf2; }
     .node.stale rect { stroke: var(--stale); stroke-width: 2.5; }
-    .node.selected rect { stroke: #f4efff; stroke-width: 3; }
-    .node.connected rect { stroke: #8d7cff; stroke-width: 2.5; }
+    .node.unused rect {
+      stroke: var(--unused);
+      stroke-width: 2.8;
+      stroke-dasharray: 8 4;
+      fill: #3d2525;
+    }
+    .node.selected rect { stroke: #ffffff; stroke-width: 3; }
+    .node.connected rect { stroke: #d2ecf2; stroke-width: 2.5; }
 
     .label {
       fill: var(--ink);
@@ -187,16 +216,16 @@
       pointer-events: none;
     }
 
-    .edge.hierarchy { stroke: #9a90d8; stroke-opacity: 0.72; stroke-width: 2; }
+    .edge.hierarchy { stroke: #b8e2e8; stroke-opacity: 0.68; stroke-width: 2; }
     .edge.import {
       marker-end: url(#arrow-flow);
-      stroke: #30d6c5;
+      stroke: #d2ecf2;
       stroke-opacity: 0.52;
       stroke-width: 1.8;
     }
 
     .edge.active {
-      stroke: #a89cff;
+      stroke: #ffffff;
       stroke-width: 3;
       stroke-opacity: 0.95;
     }
@@ -208,15 +237,14 @@
 </head>
 <body>
   <div id="toolbar">
-    <div>
-      <div id="title">Aksi Glass Blueprint</div>
-      <div id="meta">Loading architecture.json</div>
-    </div>
+    <div id="toolName">Aksi Glass Blueprint</div>
     <div id="viewModes" aria-label="Map view mode">
       <button type="button" data-view="structure" class="active">Structure</button>
       <button type="button" data-view="runtime">Runtime Flow</button>
     </div>
+    <div id="repoName">Loading repo</div>
   </div>
+  <div id="meta">Loading architecture.json</div>
   <div id="details">
   </div>
   <svg id="canvas" role="img" aria-label="Aksi codebase map"></svg>
@@ -234,13 +262,14 @@
       .attr("orient", "auto-start-reverse")
       .append("path")
       .attr("d", "M 0 0 L 10 5 L 0 10 z")
-      .attr("fill", "#30d6c5");
+      .attr("fill", "#d2ecf2");
 
     const viewport = svg.append("g").attr("class", "viewport");
     const hierarchyEdgeLayer = viewport.append("g").attr("class", "hierarchy-edges");
     const importEdgeLayer = viewport.append("g").attr("class", "import-edges");
     const nodeLayer = viewport.append("g").attr("class", "nodes");
     const meta = document.querySelector("#meta");
+    const repoName = document.querySelector("#repoName");
     const details = document.querySelector("#details");
     const modeButtons = Array.from(document.querySelectorAll("#viewModes button"));
 
@@ -617,17 +646,23 @@
         };
       }
       if (node.type === "file") {
+        const deadNote = node.unused
+          ? ` Aksi marked it as possibly unused because ${node.dead_reason || "no local usage was found."}`
+          : "";
         return {
           what: `${node.language || "Source"} file named ${node.name}.`,
-          why: "Files are the main rooms in the blueprint: they hold symbols and connect to other files through imports.",
+          why: `Files are the main rooms in the blueprint: they hold symbols and connect to other files through imports.${deadNote}`,
           how: "The scanner hashes this file, extracts symbols/imports, and the graph builder turns it into a file node.",
           role: `Source container with ${outgoing.length} outgoing and ${incoming.length} incoming relationship${connected === 1 ? "" : "s"}.`,
         };
       }
       if (["function", "class", "interface", "struct", "type"].includes(node.type)) {
+        const deadNote = node.unused
+          ? ` Aksi marked it as possibly unused because ${node.dead_reason || "no local references were found."}`
+          : "";
         return {
           what: `${node.type} named ${node.name}.`,
-          why: "Symbols show the useful internal parts of a file instead of treating code as one flat text blob.",
+          why: `Symbols show the useful internal parts of a file instead of treating code as one flat text blob.${deadNote}`,
           how: "Tree-sitter or the fallback parser found this symbol and recorded its line range.",
           role: `Code-level unit inside ${node.path || "its file"}${node.start_line ? ` at lines ${node.start_line}-${node.end_line}` : ""}.`,
         };
@@ -689,6 +724,7 @@
         node.type,
         node.language,
         node.stale ? "stale" : "",
+        node.unused ? "possibly unused" : "",
         node.path,
       ].filter(Boolean).join(" · ");
 
@@ -818,7 +854,8 @@
 
       const files = nodeArray(graph).filter(item => item.type === "file").length;
       const symbols = nodeArray(graph).filter(item => ["function", "class", "interface", "struct", "type"].includes(item.type)).length;
-      meta.textContent = `${files} files · ${symbols} symbols · ${root.links().length} tree links · ${graph.scanner?.stale_files || 0} stale`;
+      const unused = graph.analysis || {};
+      meta.textContent = `${files} files · ${symbols} symbols · ${root.links().length} tree links · ${graph.scanner?.stale_files || 0} stale · ${unused.unused_files || 0} unused files · ${unused.unused_symbols || 0} unused symbols`;
     }
 
     function renderRuntimeFlow(graph) {
@@ -896,6 +933,8 @@
     }
 
     function render(graph) {
+      const rootNode = graph.nodes?.[graph.root];
+      repoName.textContent = rootNode?.name ? `Repo: ${rootNode.name}` : "Repo: unknown";
       if (currentView === "runtime") {
         renderRuntimeFlow(graph);
         return;
@@ -919,6 +958,7 @@
     function classes(node) {
       const base = ["node", node.type];
       if (node.stale) base.push("stale");
+      if (node.unused) base.push("unused");
       return base.join(" ");
     }
 
