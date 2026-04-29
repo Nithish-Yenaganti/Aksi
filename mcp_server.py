@@ -540,6 +540,14 @@ def generate_visualization(
         "summary_index_file": str(_summary_index_path(repo)),
         "summary_targets": summary_targets,
         "summary_mode": "host_llm" if summarize else "disabled",
+        "summary_workflow": [
+            "for view in ['structure', 'architecture', 'runtime']:",
+            "  for target in summary_targets[view]:",
+            "    if not target['needs_summary']: continue",
+            "    context = get_context(target['node_id'], path)",
+            "    summary = host_llm_write_summary(context)",
+            "    save_summary(target['node_id'], summary, path)",
+        ],
         "next_steps": [
             "Give the user viewer_http_url when present; otherwise give viewer_url.",
             "Call get_map to inspect the generated graph.",

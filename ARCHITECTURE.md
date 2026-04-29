@@ -87,7 +87,7 @@ It lets an AI host call local tools instead of doing heavy repo analysis by itse
 
 Current MCP tools:
 
-- `generate_visualization(path=".")`
+- `generate_visualization(path=".", summarize=True, serve_viewer=True)`
 - `scan_repo(path=".")`
 - `get_map(path=".")`
 - `get_context(node_id, path=".")`
@@ -213,7 +213,7 @@ When connected to an MCP host, the intended workflow is:
 User asks host to visualize or explain a repo
       |
       v
-Host calls generate_visualization(path)
+Host calls generate_visualization(path, summarize=True, serve_viewer=True)
       |
       v
 Aksi scans locally, preserves summaries, writes architecture.json and index.html
@@ -222,7 +222,7 @@ Aksi scans locally, preserves summaries, writes architecture.json and index.html
 Host opens viewer URL and reads summary_targets
       |
       v
-Host calls get_context for targets where needs_summary is true
+Host loops over structure, architecture, and runtime targets where needs_summary is true
       |
       v
 Host writes grounded summaries
@@ -235,6 +235,18 @@ User clicks rectangles and sees saved summaries
 ```
 
 This keeps structural analysis local. The LLM host is used only for orchestration and grounded natural-language explanations.
+
+The host summary loop is:
+
+```text
+for view in ["structure", "architecture", "runtime"]:
+  for target in summary_targets[view]:
+    if target.needs_summary is false:
+      continue
+    context = get_context(target.node_id, path)
+    summary = write_summary_from_context(context)
+    save_summary(target.node_id, summary, path)
+```
 
 ## Design Principles
 

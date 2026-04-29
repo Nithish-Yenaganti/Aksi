@@ -43,6 +43,18 @@ The LLM may only write natural-language summaries after Aksi has produced local 
 
 On the first run, summarize every target whose `needs_summary` is true. On later runs, summarize only targets whose `summary_status` is `missing` or `stale`; skip targets marked `fresh`. Save each summary immediately with `save_summary` so the next generated viewer can show it when that rectangle is clicked.
 
+Use this exact loop shape:
+
+```text
+for view in ["structure", "architecture", "runtime"]:
+  for target in summary_targets[view]:
+    if target.needs_summary is false:
+      continue
+    context = get_context(target.node_id, path)
+    summary = write_summary_from_context(context)
+    save_summary(target.node_id, summary, path)
+```
+
 Preferred saved summary shape:
 
 ```json

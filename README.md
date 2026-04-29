@@ -105,7 +105,7 @@ file:///path/to/repo/Files/index.html
 Normal MCP workflow:
 
 1. The user asks their LLM host to add or inspect the visualization.
-2. The host calls `generate_visualization`; users do not need to run `aksi.py`.
+2. The host calls `generate_visualization(path, summarize=True, serve_viewer=True)`; users do not need to run `aksi.py`.
 3. The host gives the user `viewer_http_url` when present, otherwise `viewer_url`.
 4. The response includes `summary_targets` grouped by `structure`, `architecture`, and `runtime`.
 5. For each target where `needs_summary` is `true`, the host calls `get_context` and uses its own LLM to write the summary.
@@ -116,6 +116,18 @@ Normal MCP workflow:
 Aksi never calls an external LLM directly. It scans, builds the graph, detects stale files, marks unused-code hints, returns summary targets, preserves saved summaries, and writes the UI locally. The connected host LLM owns the language-writing step. To skip summary targets for a local run, use `python aksi.py --no-summarize`.
 
 On the first run, the host should summarize every target where `needs_summary` is `true`. On later runs, the host should only summarize targets marked `missing` or `stale`; targets marked `fresh` can be skipped.
+
+Host summary loop:
+
+```text
+for view in ["structure", "architecture", "runtime"]:
+  for target in summary_targets[view]:
+    if target.needs_summary is false:
+      continue
+    context = get_context(target.node_id, path)
+    summary = write_summary_from_context(context)
+    save_summary(target.node_id, summary, path)
+```
 
 `summary_targets` maps to the viewer tabs:
 

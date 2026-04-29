@@ -186,6 +186,8 @@ def test_generate_visualization_returns_host_llm_summary_targets(tmp_path: Path)
     assert "file:mcp_server.py" in runtime_ids
     assert "file:graph.py" in runtime_ids
     assert "save_summary" in " ".join(result["next_steps"])
+    assert "structure" in " ".join(result["summary_workflow"])
+    assert "needs_summary" in " ".join(result["summary_workflow"])
 
 
 def test_generate_visualization_can_disable_summary_targets(tmp_path: Path) -> None:
