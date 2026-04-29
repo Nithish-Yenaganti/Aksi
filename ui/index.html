@@ -231,15 +231,18 @@
     }
 
     body[data-view="structure"] .import-edges { display: none; }
+    body[data-view="architecture"] .hierarchy-edges { display: none; }
+    body[data-view="architecture"] .edge.import { stroke-opacity: 0.82; stroke-width: 2.2; }
     body[data-view="runtime"] .hierarchy-edges { display: none; }
     body[data-view="runtime"] .edge.import { stroke-opacity: 0.9; stroke-width: 2.4; }
   </style>
 </head>
 <body>
   <div id="toolbar">
-    <div id="toolName">Aksi Glass Blueprint</div>
+    <div id="toolName">Aksi </div>
     <div id="viewModes" aria-label="Map view mode">
       <button type="button" data-view="structure" class="active">Structure</button>
+      <button type="button" data-view="architecture">Architecture</button>
       <button type="button" data-view="runtime">Runtime Flow</button>
     </div>
     <div id="repoName">Loading repo</div>
@@ -620,6 +623,68 @@
       });
     }
 
+    function buildArchitectureView(graph) {
+      const nodes = graph.nodes || {};
+      const files = nodeArray(graph).filter(node => node.type === "file");
+      const usedExternalIds = new Set((graph.edges || [])
+        .filter(edge => nodes[edge.target]?.type === "external")
+        .map(edge => edge.target));
+      const externals = Array.from(usedExternalIds).map(id => nodes[id]).filter(Boolean);
+      const items = [...files, ...externals].map(node => ({
+        ...node,
+        children: [],
+        name: node.type === "file" ? node.path : node.name,
+        kindLabel: node.type === "external" ? "external dependency" : "architecture file",
+        showKindLabel: true,
+      }));
+      const itemIds = new Set(items.map(item => item.id));
+      const edges = (graph.edges || []).filter(edge => itemIds.has(edge.source) && itemIds.has(edge.target));
+      const levelById = new Map(items.map(item => [item.id, 0]));
+
+      for (let pass = 0; pass < items.length; pass += 1) {
+        let changed = false;
+        for (const edge of edges) {
+          const sourceLevel = levelById.get(edge.source) || 0;
+          const targetLevel = levelById.get(edge.target) || 0;
+          if (targetLevel <= sourceLevel) {
+            levelById.set(edge.target, sourceLevel + 1);
+            changed = true;
+          }
+        }
+        if (!changed) break;
+      }
+
+      items.forEach(item => {
+        item.level = clamp(levelById.get(item.id) || 0, 0, 8);
+        measureNode(item);
+      });
+      return { items, edges };
+    }
+
+    function layoutArchitectureItems(items) {
+      const levels = d3.group(items, item => item.level);
+      const orderedLevels = Array.from(levels.keys()).sort((a, b) => a - b);
+      const columnGap = 78;
+      const rowGap = 14;
+      let cursorX = 24;
+
+      orderedLevels.forEach(level => {
+        const column = [...levels.get(level)].sort((a, b) => {
+          const aPath = a.path || a.name;
+          const bPath = b.path || b.name;
+          return aPath.localeCompare(bPath);
+        });
+        const columnWidth = d3.max(column, item => item.boxWidth) || 140;
+        let cursorY = 24;
+        column.forEach(item => {
+          item.x = cursorX + columnWidth / 2;
+          item.y = cursorY + item.boxHeight / 2;
+          cursorY += item.boxHeight + rowGap;
+        });
+        cursorX += columnWidth + columnGap;
+      });
+    }
+
     function describeStructureNode(node, incoming, outgoing) {
       const connected = incoming.length + outgoing.length;
       const base = {
@@ -858,6 +923,82 @@
       meta.textContent = `${files} files · ${symbols} symbols · ${root.links().length} tree links · ${graph.scanner?.stale_files || 0} stale · ${unused.unused_files || 0} unused files · ${unused.unused_symbols || 0} unused symbols`;
     }
 
+    function renderArchitecture(graph) {
+      const { items, edges } = buildArchitectureView(graph);
+      layoutArchitectureItems(items);
+
+      const bounds = graphBounds(items.map(data => ({ data })));
+      const laidOutById = new Map(items.map(item => [item.id, item]));
+      currentDiagramEdges = edges;
+
+      hierarchyEdgeLayer.selectAll("path")
+        .data([])
+        .join("path");
+
+      importEdgeLayer.selectAll("path")
+        .data(edges, edge => edge.id)
+        .join("path")
+        .attr("class", "edge import")
+        .attr("d", edge => flowConnector(laidOutById.get(edge.source), laidOutById.get(edge.target)));
+
+      const node = nodeLayer.selectAll("g.node")
+        .data(items.map(data => ({ data })), item => item.data.id)
+        .join(enter => {
+          const group = enter.append("g").attr("class", item => classes(item.data));
+          group.append("rect").attr("rx", 8).attr("ry", 8);
+          group.append("text").attr("class", "label kind-label");
+          group.append("text").attr("class", "label name-label");
+          return group;
+        })
+        .attr("class", item => classes(item.data))
+        .attr("transform", item => `translate(${item.data.x - item.data.boxWidth / 2},${item.data.y - item.data.boxHeight / 2})`);
+
+      node.select("rect")
+        .attr("width", item => item.data.boxWidth)
+        .attr("height", item => item.data.boxHeight);
+
+      node.select("text.kind-label")
+        .attr("x", item => item.data.boxWidth / 2)
+        .attr("y", 16)
+        .style("display", null)
+        .text(item => item.data.kindLabel);
+
+      node.select("text.name-label")
+        .attr("x", item => item.data.boxWidth / 2)
+        .attr("y", item => item.data.boxHeight / 2 + 8)
+        .each(function(item) {
+          const text = d3.select(this);
+          text.selectAll("tspan").remove();
+          const lineHeight = 22;
+          const start = -((item.data.labelLines.length - 1) * lineHeight) / 2;
+          item.data.labelLines.forEach((line, index) => {
+            text.append("tspan")
+              .attr("x", item.data.boxWidth / 2)
+              .attr("dy", index === 0 ? start : lineHeight)
+              .text(line);
+          });
+        });
+
+      node.on("click", (event, item) => {
+        event.stopPropagation();
+        selectNode(item.data, graph);
+      });
+
+      svg.on("click", () => selectNode(null, graph));
+
+      zoomBehavior = d3.zoom()
+        .scaleExtent([0.1, 8])
+        .on("zoom", event => {
+          viewport.attr("transform", event.transform);
+        });
+      svg.call(zoomBehavior);
+      svg.call(zoomBehavior.transform, fitTransform(bounds));
+
+      const externalCount = items.filter(item => item.type === "external").length;
+      const fileCount = items.length - externalCount;
+      meta.textContent = `${fileCount} architecture files · ${externalCount} external dependencies · ${edges.length} dependency edges`;
+    }
+
     function renderRuntimeFlow(graph) {
       const { items, edges } = buildRuntimeFlow();
       layoutRuntimeItems(items);
@@ -935,6 +1076,10 @@
     function render(graph) {
       const rootNode = graph.nodes?.[graph.root];
       repoName.textContent = rootNode?.name ? `Repo: ${rootNode.name}` : "Repo: unknown";
+      if (currentView === "architecture") {
+        renderArchitecture(graph);
+        return;
+      }
       if (currentView === "runtime") {
         renderRuntimeFlow(graph);
         return;
