@@ -9,4 +9,5 @@ dist/
 build/
 node_modules/
 Files/
+.mcp/
 PROMPT.md

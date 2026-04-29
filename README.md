@@ -66,6 +66,24 @@ This writes:
 python mcp_server.py
 ```
 
+To set up the local venv and generate a client-ready MCP config snippet:
+
+```bash
+scripts/setup_mcp.sh
+```
+
+To write the snippet to an ignored local file:
+
+```bash
+scripts/setup_mcp.sh --write-config .mcp/aksi.json
+```
+
+On macOS, this can also merge Aksi into Claude Desktop's config:
+
+```bash
+scripts/setup_mcp.sh --claude-desktop
+```
+
 Available tools:
 
 - `generate_visualization(path: str = ".")`
