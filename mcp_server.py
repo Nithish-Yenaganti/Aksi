@@ -636,6 +636,25 @@ def _summary_status(summary_targets: dict[str, list[dict[str, Any]]], worklist: 
     }
 
 
+def _summary_completion(worklist: list[dict[str, Any]]) -> dict[str, Any]:
+    remaining = len(worklist)
+    required_action = (
+        "For every summary_worklist item, call get_context(node_id, path), write a grounded host-LLM "
+        "summary, then call save_summary(node_id, summary, path)."
+    )
+    return {
+        "complete": remaining == 0,
+        "required": remaining > 0,
+        "remaining": remaining,
+        "viewer_state": "graph_ready_summaries_pending" if remaining else "graph_ready_summaries_current",
+        "required_action": required_action if remaining else "No host summary work is currently required.",
+        "note": (
+            "The viewer can show the graph before summaries are complete, but rectangle explanations "
+            "only become grounded after save_summary updates Files/context/index.json."
+        ),
+    }
+
+
 def _scan_repository(
     repo: Path,
     preserved_summary_records: dict[str, Any] | None = None,
@@ -674,6 +693,7 @@ def generate_visualization(
     summary_targets = _summary_targets(repo, architecture) if should_prepare_summaries else _empty_summary_targets()
     summary_worklist = _summary_worklist(summary_targets)
     summary_status = _summary_status(summary_targets, summary_worklist)
+    summary_completion = _summary_completion(summary_worklist)
     viewer_file = _write_static_viewer(repo, architecture)
     viewer_http_url = None
     viewer_http_error = None
@@ -692,6 +712,8 @@ def generate_visualization(
         "summary_targets": summary_targets,
         "summary_worklist": summary_worklist,
         "summary_status": summary_status,
+        "summary_completion": summary_completion,
+        "summaries_complete": summary_completion["complete"],
         "summary_mode": "host_llm_worklist" if should_prepare_summaries else "disabled",
         "summary_behavior": {
             "automatic_summaries": False,
@@ -718,8 +740,11 @@ def generate_visualization(
         "refinement_workflow": [
             "Use local Architecture and Runtime Flow as candidates only.",
             "Call get_map(path) and get_context(node_id, path) for repo root and important files/components.",
-            "Host LLM writes a real architecture model and calls save_architecture_model(model, path).",
-            "Host LLM writes a real runtime/input-flow model and calls save_runtime_model(model, path).",
+            "Host LLM may refine labels and grouping only from grounded get_map/get_context evidence.",
+            "Host LLM calls save_architecture_model(model, path) for an optional grounded architecture model.",
+            "Host LLM calls save_runtime_model(model, path) for an optional grounded runtime/input-flow model.",
+            "Refined models do not clear summary_worklist; only save_summary clears summary work.",
+            "Mark uncertainty and do not add unsupported components, flows, callers, dependencies, or runtime behavior.",
             "Aksi regenerates Files/index.html and the viewer prefers saved host-refined models.",
         ],
         "refined_model_schema": {
@@ -741,11 +766,14 @@ def generate_visualization(
             "edges": [{"source": "node id", "target": "node id", "label": "relationship"}],
         },
         "next_steps": [
-            "Give the user viewer_http_url when present; otherwise give viewer_url.",
-            "Call get_map to inspect the generated graph.",
-            "For each item in summary_worklist, call get_context and use the host LLM to write the explanation.",
-            "Call save_summary for each written explanation so the viewer can show it on rectangle click.",
-            "For final Architecture and Runtime Flow tabs, use host LLM context to call save_architecture_model and save_runtime_model.",
+            "Inspect summary_mode, summary_completion, and summary_worklist before presenting the viewer as complete.",
+            "Treat summary_worklist as the executable queue; do not iterate summary_targets directly for required work.",
+            "If summary_completion.required is true, call get_context for every summary_worklist item and write grounded host-LLM summaries.",
+            "Call save_summary for each written explanation, then re-check completion with get_summary_worklist or generate_visualization.",
+            "Only say saved rectangle summaries are current when summary_mode is host_llm_worklist and refreshed summary_completion.complete is true.",
+            "If summary_mode is disabled, say the graph is ready without summary targets.",
+            "Give viewer_http_url when present; otherwise give viewer_url, labeling early links as graph-only previews when summaries remain pending.",
+            "Use save_architecture_model and save_runtime_model only for optional grounded refinements; they do not clear summary_worklist.",
         ],
     }
 
@@ -767,11 +795,14 @@ def get_summary_worklist(path: str = ".") -> dict[str, Any]:
     _write_summary_index(repo)
     summary_targets = _summary_targets(repo, architecture)
     worklist = _summary_worklist(summary_targets)
+    completion = _summary_completion(worklist)
     return {
         "path": str(repo),
         "summary_targets": summary_targets,
         "summary_worklist": worklist,
         "summary_status": _summary_status(summary_targets, worklist),
+        "summary_completion": completion,
+        "summaries_complete": completion["complete"],
         "host_llm_required": bool(worklist),
     }
 

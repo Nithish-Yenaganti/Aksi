@@ -22,6 +22,11 @@ def test_mcp_helpers_return_expected_shapes(tmp_path: Path) -> None:
     assert scan_summary["summary_behavior"]["written_by_aksi"] == 0
     assert scan_summary["host_llm_required"] is True
     assert scan_summary["summary_status"]["work_items"] == len(scan_summary["summary_worklist"])
+    assert scan_summary["summary_completion"]["required"] is True
+    assert scan_summary["summary_completion"]["complete"] is False
+    assert scan_summary["summary_completion"]["remaining"] == len(scan_summary["summary_worklist"])
+    assert scan_summary["summary_completion"]["viewer_state"] == "graph_ready_summaries_pending"
+    assert scan_summary["summaries_complete"] is False
     root_target = next(target for target in scan_summary["summary_targets"]["structure"] if target["node_id"] == graph["root"])
     file_target = next(target for target in scan_summary["summary_targets"]["structure"] if target["node_id"] == file_node["id"])
     assert root_target["needs_summary"] is True
@@ -280,6 +285,11 @@ def test_generate_visualization_returns_host_llm_summary_targets(tmp_path: Path)
     assert "file:mcp_server.py" in runtime_ids
     assert "file:graph.py" in runtime_ids
     assert "save_summary" in " ".join(result["next_steps"])
+    assert result["next_steps"][0].startswith("Inspect summary_mode")
+    assert "graph-only previews" in " ".join(result["next_steps"])
+    assert "do not clear summary_worklist" in " ".join(result["next_steps"])
+    assert "grounded get_map/get_context" in " ".join(result["refinement_workflow"])
+    assert "Refined models do not clear summary_worklist" in " ".join(result["refinement_workflow"])
     assert "summary_worklist" in " ".join(result["summary_workflow"])
     assert result["summary_worklist"]
     assert len({target["node_id"] for target in result["summary_worklist"]}) == len(result["summary_worklist"])
@@ -304,6 +314,9 @@ def test_generate_visualization_can_disable_summary_targets(tmp_path: Path) -> N
     assert result["summary_targets"] == {"structure": [], "architecture": [], "runtime": []}
     assert result["summary_worklist"] == []
     assert result["host_llm_required"] is False
+    assert result["summary_completion"]["complete"] is True
+    assert result["summary_completion"]["required"] is False
+    assert result["summaries_complete"] is True
 
 
 def test_generate_visualization_prepare_summary_targets_alias(tmp_path: Path) -> None:
@@ -329,6 +342,7 @@ def test_get_summary_worklist_returns_deduplicated_missing_and_stale_nodes(tmp_p
     second = mcp_server.get_summary_worklist(str(tmp_path))
     second_ids = {item["node_id"] for item in second["summary_worklist"]}
     assert file_item["node_id"] not in second_ids
+    assert second["summary_completion"]["remaining"] == len(second["summary_worklist"])
 
     source.write_text("def run():\n    return 2\n", encoding="utf-8")
     third = mcp_server.get_summary_worklist(str(tmp_path))

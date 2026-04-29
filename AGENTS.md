@@ -4,46 +4,16 @@
 
 Aksi turns a local codebase into a generated visual map for coding agents and humans.
 
-The scanner and graph builder are local source-of-truth systems. Do not use an LLM to guess files, symbols, imports, dependencies, stale state, unused-code hints, or architecture candidates.
+Aksi scans locally. The scanner and graph builder are the source of truth for files, symbols, imports, dependency edges, stale state, unused-code hints, and local architecture/runtime candidates. Do not use an LLM to guess or replace those facts.
 
-## Expected Agent Flow
+## Required MCP Flow
 
-When a user asks to visualize, refresh, inspect, or explain a project through MCP:
+When a user asks to visualize, refresh, inspect, or explain a project through Aksi MCP:
 
-1. Call `generate_visualization(path)` for the target repository.
-2. Give the user `viewer_http_url` when it exists; otherwise give `viewer_url`.
-3. Read `summary_targets` from the response.
-4. For every target where `needs_summary` is `true`, call `get_context(node_id, path)`.
-5. Write the summary from that exact context and call `save_summary(node_id, summary, path)`.
-6. Use `get_map(path)` only when you need extra node IDs, counts, edges, stale files, unused markers, or architecture components.
-7. Use `get_context(node_id, path)` before explaining any specific rectangle.
-
-Do not ask the user to run `aksi.py` manually when MCP tools are available. `aksi.py` is only for direct local use outside an MCP host.
-
-## Summary Flow
-
-`generate_visualization` scans first, then returns summary targets for the host LLM.
-
-Default behavior:
-
-```text
-scan repo locally
-build graph locally
-detect architecture components locally
-preserve old summaries and mark stale ones
-write Files/index.html with the current map and available summaries
-return summary targets grouped by structure, architecture, and runtime
-host LLM calls get_context for each target where needs_summary is true
-host LLM writes summaries
-host calls save_summary
-save_summary updates Files/context/index.json and regenerates Files/index.html
-```
-
-The LLM may only write natural-language summaries after Aksi has produced local context. The LLM must not decide source structure, architecture candidates, or runtime-flow candidates.
-
-On the first run, summarize every target whose `needs_summary` is true. On later runs, summarize only targets whose `summary_status` is `missing` or `stale`; skip targets marked `fresh`. Save each summary immediately with `save_summary` so the next generated viewer can show it when that rectangle is clicked.
-
-Use this exact loop shape:
+1. Call `generate_visualization(path, prepare_summary_targets=True)` for the target repository.
+2. Inspect `summary_mode`, `summary_completion`, and `summary_worklist` from that response.
+3. Treat `summary_worklist` as the executable queue. Do not iterate `summary_targets` directly for required work.
+4. If `summary_completion.required` is `true`, process every item in `summary_worklist`:
 
 ```text
 for target in summary_worklist:
@@ -52,7 +22,46 @@ for target in summary_worklist:
   save_summary(target.node_id, summary, path)
 ```
 
-Preferred saved summary shape:
+5. If any summaries were saved, re-check with `get_summary_worklist(path)` or `generate_visualization(path, prepare_summary_targets=True)`.
+6. Use the refreshed `summary_completion` for the final status. If no summary work was required, use the original `summary_completion`.
+7. Give the user the `viewer_http_url` from the latest `generate_visualization` response when it exists; otherwise give `viewer_url`. If the re-check used `get_summary_worklist(path)`, reuse the URL from the prior `generate_visualization` response. Include an accurate status:
+   - if `summary_mode` is `host_llm_worklist` and refreshed `summary_completion.complete` is `true`, say the graph and saved rectangle summaries are current;
+   - if `summary_mode` is `disabled`, say the graph is ready without summary targets;
+   - if refreshed `summary_completion.required` is `true`, say this is an early graph-only preview and summaries are still pending.
+
+Never present the viewer as complete while `summary_completion.required` is `true`. A generated `Files/index.html` means the graph exists; it does not mean rectangle summaries are finished.
+
+You may share an early preview link before summary work is complete only if it is clearly labeled as graph-only/summaries-pending. Do not let an early preview replace the summary work unless the user explicitly asks to skip summaries.
+
+Do not ask the user to run `aksi.py` manually when MCP tools are available.
+
+## Summary Contract
+
+`generate_visualization`:
+
+- scans the repo locally;
+- writes `Files/architecture.json`;
+- preserves saved summaries and marks changed context stale;
+- writes `Files/index.html` with the current graph and any saved summaries;
+- returns `summary_targets` grouped by viewer area;
+- returns a deduplicated `summary_worklist` containing only missing or stale nodes;
+- returns `summary_completion` describing whether host-written summary work remains.
+
+Aksi does not call an LLM and does not write summaries by itself. `summarize=True` is only a compatibility name for preparing host work items. Prefer `prepare_summary_targets=True` in MCP clients.
+
+Each `summary_targets` item includes `summary_status`, `needs_summary`, and `action`; `summary_worklist` contains the missing or stale items that must be executed:
+
+```text
+missing -> action: write
+stale   -> action: refresh
+fresh   -> action: skip
+```
+
+On the first run, process every item in `summary_worklist`. On later runs, process every returned worklist item; fresh summaries are preserved and omitted from the worklist.
+
+`save_summary` stores the host-written summary under `Files/context/`, updates `Files/context/index.json`, and regenerates `Files/index.html`. Only `save_summary` clears summary work; saving refined architecture or runtime models does not remove items from `summary_worklist`.
+
+Preferred summary shape:
 
 ```json
 {
@@ -67,7 +76,30 @@ Preferred saved summary shape:
 }
 ```
 
-Use saved summaries first on later runs. Reopen source with `get_context` only when a summary is missing, stale, low-confidence, directly relevant to the user's requested change, or has an `open_questions` item that matters. Use `change_risk` to help future agents decide how carefully to edit this node. Use `confidence` honestly; choose `low` when the context is partial or generated by static analysis only. Keep summaries concise, grounded in `get_context`, and avoid guessing behavior that is not visible in the returned source/context.
+Write summaries only from `get_context` output. Keep them concise and grounded. Use low confidence when context is partial, such as a component where files were omitted.
+
+## Viewer Coverage
+
+`summary_targets` is view-keyed:
+
+- `structure`: repo, folder, file, and symbol rectangles.
+- `architecture`: local architecture component rectangles.
+- `runtime`: static dependency-flow file/external rectangles, not traced runtime execution.
+
+Runtime targets currently reflect the dependency-flow projection. They are not proof of traced runtime behavior.
+
+Use `get_context(node_id, path)` before explaining any specific rectangle. Use `get_map(path)` only when you need graph details such as node IDs, counts, edges, stale files, unused markers, or architecture components.
+
+## Architecture and Runtime Refinement
+
+Architecture and Runtime Flow tabs start with local Aksi candidates. The host LLM may synthesize or refine labels and grouping only after grounding them in `get_map` and relevant `get_context` output:
+
+- `save_architecture_model(model, path)` for a project architecture model.
+- `save_runtime_model(model, path)` for a runtime/input-flow model.
+
+Saved host-refined models are preferred by the viewer. Local components and dependency flow remain fallback candidates. Refined models are optional and are not a substitute for processing `summary_worklist`; only `save_summary` clears summary work.
+
+Mark uncertainty in refined models. Do not add unsupported components, flows, callers, dependencies, or runtime behavior.
 
 ## Generated Output
 
@@ -80,78 +112,40 @@ Aksi writes generated files into the scanned repository:
 
 Do not commit `Files/`.
 
-## Main Files
-
-- `scanner.py`: walks the repo, hashes files, extracts symbols, and extracts imports.
-- `graph.py`: builds `architecture.json`, tree nodes, dependency edges, stale flags, unused-code hints, and architecture components.
-- `mcp_server.py`: FastMCP stdio server and agent-facing tools.
-- `aksi.py`: one-command local runner that generates and serves `Files/index.html`.
-- `ui/index.html`: static viewer template copied into generated output.
-- `tests/`: coverage for scanner, graph, MCP behavior, and summary persistence.
-
 ## MCP Tools
 
 - `generate_visualization(path=".", summarize=True, prepare_summary_targets=None, serve_viewer=True)`
-- `scan_repo(path=".")`
-- `get_map(path=".")`
 - `get_summary_worklist(path=".")`
 - `get_context(node_id, path=".")`
 - `save_summary(node_id, summary, path=".")`
+- `get_map(path=".")`
 - `get_summary(node_id, path=".")`
 - `list_summaries(path=".")`
 - `save_architecture_model(model, path=".")`
 - `save_runtime_model(model, path=".")`
 - `get_models(path=".")`
 - `stop_viewer(path=".")`
+- `scan_repo(path=".")`
 
-`summary_targets` is view-keyed. `summary_worklist` is deduplicated by node id and is the list the host should execute:
+Passing `summarize=False` or `prepare_summary_targets=False` disables summary targets and makes `summary_completion.required` false. Do this only when the user explicitly wants a graph without host-written summaries.
 
-```text
-structure: repo, folder, file, and symbol rectangles
-architecture: architecture component rectangles
-runtime: static dependency-flow file/external rectangles, not traced runtime execution
-```
-
-Architecture and runtime tabs use local Aksi candidates until the host LLM saves refined models. For final project understanding, call `get_map` and `get_context` for the repo root and important nodes, then save:
-
-- `save_architecture_model(model, path)` for the real project architecture
-- `save_runtime_model(model, path)` for the real input/process flow
-
-Saved host-refined models are preferred by the viewer. Local components and dependency flow remain fallback candidates.
-
-`summarize=True` is kept for compatibility, but it does not make Aksi call an LLM. It means "prepare summary targets for the host." New hosts may pass `prepare_summary_targets=True` for clearer intent.
-
-Each target includes `summary_status`, `needs_summary`, and `action`:
-
-```text
-missing -> write
-stale -> refresh
-fresh -> skip
-```
-
-Runtime targets currently reflect the dependency-flow projection. A future runtime model may introduce dedicated `runtime:*` node IDs.
-
-## CLI
-
-```bash
-python aksi.py
-python aksi.py --no-summarize
-python aksi.py --scan-only
-python aksi.py --test
-```
-
-`python aksi.py` writes `Files/index.html` and serves that generated viewer.
-
-## Rules
+## Project Rules
 
 - Do not read old git history unless the user explicitly asks.
-- Keep scanning, graph building, stale detection, unused-code detection, and architecture candidate detection local.
+- Keep scanning, graph building, stale detection, unused-code detection, and local architecture/runtime candidate detection local.
 - Keep the MCP server stdio-based.
 - Keep the viewer static.
 - Prefer Tree-sitter or structured parsing; regex fallbacks are only for resilience.
 - Keep public command and MCP tool names stable unless the user asks for a breaking change.
 
-## Validation
+Main files:
+
+- `scanner.py`: walks the repo, hashes files, extracts symbols, and extracts imports.
+- `graph.py`: builds `architecture.json`, tree nodes, dependency edges, stale flags, unused-code hints, and local architecture components.
+- `mcp_server.py`: FastMCP stdio server and agent-facing tools.
+- `aksi.py`: one-command local runner that generates and serves `Files/index.html`.
+- `ui/index.html`: static viewer template copied into generated output.
+- `tests/`: coverage for scanner, graph, MCP behavior, and summary persistence.
 
 Before finishing implementation work, run:
 

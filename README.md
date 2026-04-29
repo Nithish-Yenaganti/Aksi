@@ -112,15 +112,18 @@ Normal MCP workflow:
 1. The user asks their LLM host to add or inspect the visualization.
 2. The host calls `generate_visualization(path, prepare_summary_targets=True, serve_viewer=True)`; users do not need to run `aksi.py`.
 3. The host gives the user `viewer_http_url` when present, otherwise `viewer_url`.
-4. The response includes grouped `summary_targets`, a deduplicated `summary_worklist`, and `summary_status` counts.
-5. For each item in `summary_worklist`, the host calls `get_context` and uses its own LLM to write the summary.
-6. The host calls `save_summary` for each written explanation so the viewer can show it when that rectangle is clicked.
-7. Aksi stores summaries under `Files/context/`, updates `Files/context/index.json`, and regenerates `Files/index.html`.
-8. On the next run, Aksi preserves fresh summaries, marks changed context as stale, and returns only stale or missing targets as needing work.
+4. The response includes grouped `summary_targets`, a deduplicated `summary_worklist`, `summary_status` counts, and `summary_completion`.
+5. If `summary_completion.required` is `true`, the graph is ready but rectangle summaries are still pending.
+6. For each item in `summary_worklist`, the host calls `get_context` and uses its own LLM to write the summary.
+7. The host calls `save_summary` for each written explanation so the viewer can show it when that rectangle is clicked.
+8. Aksi stores summaries under `Files/context/`, updates `Files/context/index.json`, and regenerates `Files/index.html`.
+9. On the next run, Aksi preserves fresh summaries, marks changed context as stale, and returns only stale or missing targets as needing work.
 
 Aksi never calls an external LLM directly. It scans, builds the graph, detects stale files, marks unused-code hints, returns summary targets, preserves saved summaries, and writes the UI locally. The connected host LLM owns the language-writing step. To skip summary targets for a local run, use `python aksi.py --no-summarize`.
 
 `summarize=True` is a compatibility name for preparing summary targets. It does not write summaries automatically. Prefer `prepare_summary_targets=True` in new MCP clients.
+
+The viewer may be usable before summaries are complete. If `summary_completion.viewer_state` is `graph_ready_summaries_pending`, the host must complete `summary_worklist` before claiming Structure, Architecture, and Runtime rectangles have grounded explanations.
 
 On the first run, the host should complete every item in `summary_worklist`. On later runs, Aksi only puts missing or stale nodes in that worklist; fresh summaries are skipped.
 
