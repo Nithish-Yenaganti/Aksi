@@ -93,6 +93,10 @@ Available tools:
 - `save_summary(node_id: str, summary, path: str = ".")`
 - `get_summary(node_id: str, path: str = ".")`
 - `list_summaries(path: str = ".")`
+- `save_architecture_model(model, path: str = ".")`
+- `save_runtime_model(model, path: str = ".")`
+- `get_models(path: str = ".")`
+- `stop_viewer(path: str = ".")`
 
 `generate_visualization` also writes a ready local viewer. It returns a localhost URL when Aksi can start the small static viewer server, and always returns a `file://` fallback:
 
@@ -133,16 +137,20 @@ for view in ["structure", "architecture", "runtime"]:
 
 - `structure`: repo, folder, file, and symbol rectangles.
 - `architecture`: detected architecture component rectangles.
-- `runtime`: current runtime-flow file/external rectangles from dependency relationships.
+- `runtime`: current static dependency-flow file/external rectangles, not traced runtime execution.
+
+The Architecture and Runtime Flow tabs start with local Aksi candidates. For final output, the host LLM should read Aksi context and save refined models with `save_architecture_model` and `save_runtime_model`; the viewer prefers those saved models when available.
 
 Recommended summary format:
 
 ```json
 {
-  "what": "What this rectangle represents.",
-  "why": "Why it exists in the project.",
-  "how": "How it works based on get_context.",
-  "role": "Its role in the current view and surrounding code."
+  "summary": "One or two sentences describing this rectangle.",
+  "responsibility": "The job this node owns in the project.",
+  "how_it_works": "Concrete behavior grounded in get_context output.",
+  "relationships": "Important callers, dependencies, child nodes, or connected modules.",
+  "change_risk": "low, medium, or high, with a short reason.",
+  "confidence": "high, medium, or low based on available context."
 }
 ```
 

@@ -169,6 +169,94 @@ def test_mcp_returns_context_for_architecture_components(tmp_path: Path) -> None
     assert listed["summaries"][component["id"]]["summary"] == "This component exposes the MCP entrypoint."
 
 
+def test_component_context_limits_large_payloads(tmp_path: Path) -> None:
+    for index in range(14):
+        (tmp_path / f"module_{index}.py").write_text(
+            f"def helper_{index}():\n    return {index}\n",
+            encoding="utf-8",
+        )
+
+    mcp_server.generate_visualization(str(tmp_path))
+    graph = mcp_server.get_map(str(tmp_path))
+    component = next(component for component in graph["components"] if component["name"] == "Application Core")
+    context = mcp_server.get_context(component["id"], str(tmp_path))
+
+    assert len(context["sources"]) == mcp_server.MAX_COMPONENT_CONTEXT_FILES
+    assert context["context_limit"]["omitted_files"] == 2
+
+
+def test_stop_viewer_closes_running_viewer_server(tmp_path: Path) -> None:
+    class FakeServer:
+        def __init__(self) -> None:
+            self.shutdown_called = False
+            self.close_called = False
+
+        def shutdown(self) -> None:
+            self.shutdown_called = True
+
+        def server_close(self) -> None:
+            self.close_called = True
+
+    repo = tmp_path.resolve()
+    server = FakeServer()
+    mcp_server._VIEWER_SERVERS[str(repo)] = (server, 12345)
+
+    stopped = mcp_server.stop_viewer(str(tmp_path))
+    stopped_again = mcp_server.stop_viewer(str(tmp_path))
+
+    assert stopped["stopped"] is True
+    assert server.shutdown_called is True
+    assert server.close_called is True
+    assert stopped_again["stopped"] is False
+
+
+def test_host_refined_models_are_saved_and_embedded_in_viewer(tmp_path: Path) -> None:
+    (tmp_path / "app.py").write_text("def run():\n    return 1\n", encoding="utf-8")
+    mcp_server.generate_visualization(str(tmp_path))
+    model = {
+        "nodes": [
+            {
+                "id": "arch:entry",
+                "name": "Entry Layer",
+                "type": "architecture_component",
+                "summary": "Receives requests.",
+                "responsibility": "Start the workflow.",
+                "how_it_works": "Calls local code discovered by Aksi.",
+                "relationships": "Connects to core.",
+                "change_risk": "medium",
+                "confidence": "high",
+            },
+            {"id": "arch:core", "name": "Core Logic", "type": "architecture_component"},
+        ],
+        "edges": [{"source": "arch:entry", "target": "arch:core", "label": "delegates"}],
+    }
+
+    saved = mcp_server.save_architecture_model(model, str(tmp_path))
+    models = mcp_server.get_models(str(tmp_path))
+    viewer = (tmp_path / "Files" / "index.html").read_text(encoding="utf-8")
+
+    assert saved["saved"] is True
+    assert models["models"]["architecture"]["nodes"][0]["name"] == "Entry Layer"
+    assert "Entry Layer" in viewer
+    assert "__AKSI_MODELS__" in viewer
+
+
+def test_refined_model_rejects_bad_edges(tmp_path: Path) -> None:
+    (tmp_path / "app.py").write_text("def run():\n    return 1\n", encoding="utf-8")
+    mcp_server.generate_visualization(str(tmp_path))
+
+    result = mcp_server.save_runtime_model(
+        {
+            "nodes": [{"id": "runtime:start", "name": "Start"}],
+            "edges": [{"source": "runtime:start", "target": "runtime:missing"}],
+        },
+        str(tmp_path),
+    )
+
+    assert "error" in result
+    assert result["model_type"] == "runtime"
+
+
 def test_generate_visualization_returns_host_llm_summary_targets(tmp_path: Path) -> None:
     (tmp_path / "mcp_server.py").write_text("def serve():\n    return True\n", encoding="utf-8")
     (tmp_path / "graph.py").write_text("def build():\n    return 1\n", encoding="utf-8")
@@ -188,6 +276,14 @@ def test_generate_visualization_returns_host_llm_summary_targets(tmp_path: Path)
     assert "save_summary" in " ".join(result["next_steps"])
     assert "structure" in " ".join(result["summary_workflow"])
     assert "needs_summary" in " ".join(result["summary_workflow"])
+    assert set(result["summary_schema"]) == {
+        "summary",
+        "responsibility",
+        "how_it_works",
+        "relationships",
+        "change_risk",
+        "confidence",
+    }
 
 
 def test_generate_visualization_can_disable_summary_targets(tmp_path: Path) -> None:
@@ -224,6 +320,46 @@ def test_summary_targets_skip_fresh_and_refresh_changed_nodes(tmp_path: Path) ->
     assert stale_target["summary_status"] == "stale"
     assert stale_target["needs_summary"] is True
     assert stale_target["action"] == "refresh"
+
+
+def test_summary_targets_preserve_fresh_and_refresh_only_changed_context(tmp_path: Path) -> None:
+    app = tmp_path / "app.py"
+    helper = tmp_path / "helper.py"
+    app.write_text("from helper import help_me\n\ndef run():\n    return help_me()\n", encoding="utf-8")
+    helper.write_text("def help_me():\n    return 1\n", encoding="utf-8")
+
+    first = mcp_server.generate_visualization(str(tmp_path))
+    selected_targets = [
+        target
+        for target in first["summary_targets"]["structure"]
+        if target["type"] in {"file", "function"}
+    ]
+    for target in selected_targets:
+        mcp_server.save_summary(target["node_id"], {"what": f"summary for {target['node_id']}"}, str(tmp_path))
+
+    second = mcp_server.generate_visualization(str(tmp_path))
+    second_by_id = {
+        target["node_id"]: target
+        for target in second["summary_targets"]["structure"]
+        if target["node_id"] in {item["node_id"] for item in selected_targets}
+    }
+
+    assert second_by_id
+    assert all(target["summary_status"] == "fresh" for target in second_by_id.values())
+    assert all(target["needs_summary"] is False for target in second_by_id.values())
+
+    helper.write_text("def help_me():\n    return 2\n", encoding="utf-8")
+    third = mcp_server.generate_visualization(str(tmp_path))
+    changed_targets = {
+        target["node_id"]: target
+        for target in third["summary_targets"]["structure"]
+        if target["node_id"] in second_by_id
+    }
+
+    assert changed_targets["file:helper.py"]["summary_status"] == "stale"
+    assert changed_targets["file:helper.py"]["needs_summary"] is True
+    assert changed_targets["file:app.py"]["summary_status"] == "fresh"
+    assert changed_targets["file:app.py"]["needs_summary"] is False
 
 
 def test_get_context_for_folder_returns_child_file_sources(tmp_path: Path) -> None:

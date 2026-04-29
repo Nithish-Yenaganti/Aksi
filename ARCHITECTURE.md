@@ -94,6 +94,10 @@ Current MCP tools:
 - `save_summary(node_id, summary, path=".")`
 - `get_summary(node_id, path=".")`
 - `list_summaries(path=".")`
+- `save_architecture_model(model, path=".")`
+- `save_runtime_model(model, path=".")`
+- `get_models(path=".")`
+- `stop_viewer(path=".")`
 
 The MCP server does not scan by asking an LLM. It calls Aksi’s local scanner and graph builder.
 
@@ -111,15 +115,15 @@ It loads:
 It currently renders three views:
 
 - `Structure`: full repo tree with folders, files, and symbols
-- `Architecture`: local component candidates grouped from files, symbols, names, and dependency relationships
-- `Runtime Flow`: static import/dependency-flow projection between local files and external dependency endpoints
+- `Architecture`: host-refined project architecture when saved; otherwise local component candidates
+- `Runtime Flow`: host-refined input/process flow when saved; otherwise static import/dependency-flow projection
 
 Clicking a rectangle opens a detail card with:
 
-- what it is
-- why it exists
+- concise summary
+- responsibility
 - how it works
-- its role
+- relationships or change risk
 - saved LLM summary when available
 
 ### `Files/`

@@ -19,6 +19,7 @@ from graph import load_architecture, refresh_stale_flags, slug, summarize_archit
 
 mcp = FastMCP("Aksi")
 _VIEWER_SERVERS: dict[str, tuple[socketserver.TCPServer, int]] = {}
+MAX_COMPONENT_CONTEXT_FILES = 12
 
 
 def _aksi_root() -> Path:
@@ -48,6 +49,10 @@ def _viewer_path(repo: Path) -> Path:
     return repo / "Files" / "index.html"
 
 
+def _models_path(repo: Path) -> Path:
+    return _context_dir(repo) / "models.json"
+
+
 def _viewer_http_url(repo: Path) -> str:
     key = str(repo)
     if key not in _VIEWER_SERVERS:
@@ -59,6 +64,16 @@ def _viewer_http_url(repo: Path) -> str:
         _VIEWER_SERVERS[key] = (server, port)
     _server, port = _VIEWER_SERVERS[key]
     return f"http://127.0.0.1:{port}/index.html"
+
+
+def _stop_viewer_server(repo: Path) -> bool:
+    server_info = _VIEWER_SERVERS.pop(str(repo), None)
+    if server_info is None:
+        return False
+    server, _port = server_info
+    server.shutdown()
+    server.server_close()
+    return True
 
 
 def _utc_now() -> str:
@@ -81,11 +96,13 @@ def _script_json(payload: Any) -> str:
 def _write_static_viewer(repo: Path, architecture: dict[str, Any]) -> Path:
     ui_source = (_aksi_root() / "ui" / "index.html").read_text(encoding="utf-8")
     summaries = _read_json(_summary_index_path(repo), {"summaries": {}})
+    models = _read_json(_models_path(repo), {"models": {}})
     marker = "  <script>\n    const svg = d3.select"
     embedded = (
         "  <script>\n"
         f"    window.__AKSI_ARCHITECTURE__ = {_script_json(architecture)};\n"
         f"    window.__AKSI_SUMMARIES__ = {_script_json(summaries)};\n"
+        f"    window.__AKSI_MODELS__ = {_script_json(models)};\n"
         "  </script>\n"
     )
     if marker not in ui_source:
@@ -180,7 +197,9 @@ def _component_context(
 ) -> dict[str, Any]:
     file_ids = [item for item in node.get("children", []) if nodes.get(item, {}).get("type") == "file"]
     files = [nodes[item] for item in file_ids if item in nodes]
-    sources = [{"path": file_node.get("path"), "source": _read_source(repo, file_node.get("path", ""))} for file_node in files]
+    included_files = files[:MAX_COMPONENT_CONTEXT_FILES]
+    omitted_files = max(0, len(files) - len(included_files))
+    sources = [{"path": file_node.get("path"), "source": _read_source(repo, file_node.get("path", ""))} for file_node in included_files]
     source = "\n\n".join(f"# {item['path']}\n{item['source']}" for item in sources if item.get("path"))
     symbols = [
         nodes[child]
@@ -217,6 +236,11 @@ def _component_context(
         "edges": component_edges,
         "file_edges": file_edges,
         "neighbors": [nodes[item] for item in neighbor_ids if item in nodes],
+        "context_limit": {
+            "included_files": len(included_files),
+            "omitted_files": omitted_files,
+            "max_component_context_files": MAX_COMPONENT_CONTEXT_FILES,
+        },
         "saved_summary": None if saved_summary.get("missing") else saved_summary,
     }
 
@@ -366,6 +390,80 @@ def _write_summary_index(repo: Path, seed_records: dict[str, Any] | None = None)
         ),
         encoding="utf-8",
     )
+
+
+def _read_models(repo: Path) -> dict[str, Any]:
+    payload = _read_json(_models_path(repo), {"models": {}})
+    if not isinstance(payload, dict):
+        return {"models": {}}
+    models = payload.get("models")
+    if not isinstance(models, dict):
+        payload["models"] = {}
+    return payload
+
+
+def _validate_refined_model(model: Any, model_type: str) -> dict[str, Any]:
+    if not isinstance(model, dict):
+        raise TypeError("model must be a JSON object")
+    nodes = model.get("nodes")
+    edges = model.get("edges", [])
+    if not isinstance(nodes, list) or not nodes:
+        raise ValueError("model.nodes must be a non-empty list")
+    if not isinstance(edges, list):
+        raise ValueError("model.edges must be a list")
+
+    normalized_nodes: list[dict[str, Any]] = []
+    node_ids: set[str] = set()
+    for index, node in enumerate(nodes, start=1):
+        if not isinstance(node, dict):
+            raise ValueError("each model node must be an object")
+        node_id = str(node.get("id") or f"{model_type}:{index}")
+        name = str(node.get("name") or node_id)
+        normalized = {
+            **node,
+            "id": node_id,
+            "name": name,
+            "type": node.get("type") or model_type,
+        }
+        node_ids.add(node_id)
+        normalized_nodes.append(normalized)
+
+    normalized_edges: list[dict[str, Any]] = []
+    for index, edge in enumerate(edges, start=1):
+        if not isinstance(edge, dict):
+            raise ValueError("each model edge must be an object")
+        source = edge.get("source")
+        target = edge.get("target")
+        if source not in node_ids or target not in node_ids:
+            raise ValueError("model edge endpoints must reference model node ids")
+        normalized_edges.append(
+            {
+                **edge,
+                "id": edge.get("id") or f"{model_type}-edge:{index}",
+                "type": edge.get("type") or "refined_relationship",
+                "source": source,
+                "target": target,
+            }
+        )
+
+    return {
+        **model,
+        "nodes": normalized_nodes,
+        "edges": normalized_edges,
+        "model_type": model_type,
+        "updated_at": _utc_now(),
+        "written_by": "llm_host",
+    }
+
+
+def _save_refined_model(repo: Path, model_type: str, model: Any) -> dict[str, Any]:
+    normalized = _validate_refined_model(model, model_type)
+    payload = _read_models(repo)
+    payload["generated_at"] = _utc_now()
+    payload.setdefault("models", {})[model_type] = normalized
+    _models_path(repo).write_text(json.dumps(payload, indent=2), encoding="utf-8")
+    _write_static_viewer(repo, refresh_stale_flags(load_architecture(repo), repo))
+    return {"saved": True, "model_type": model_type, "models_file": str(_models_path(repo)), "model": normalized}
 
 
 def _save_summary_record(repo: Path, node_id: str, summary: Any, written_by: str) -> dict[str, Any]:
@@ -548,11 +646,43 @@ def generate_visualization(
             "    summary = host_llm_write_summary(context)",
             "    save_summary(target['node_id'], summary, path)",
         ],
+        "summary_schema": {
+            "summary": "One or two sentences describing this rectangle.",
+            "responsibility": "The job this node owns in the project.",
+            "how_it_works": "Concrete behavior grounded in get_context output.",
+            "relationships": "Important callers, dependencies, child nodes, or connected modules.",
+            "change_risk": "low, medium, or high, with a short reason.",
+            "confidence": "high, medium, or low based on available context.",
+        },
+        "refinement_workflow": [
+            "Use local Architecture and Runtime Flow as candidates only.",
+            "Call get_map(path) and get_context(node_id, path) for repo root and important files/components.",
+            "Host LLM writes a real architecture model and calls save_architecture_model(model, path).",
+            "Host LLM writes a real runtime/input-flow model and calls save_runtime_model(model, path).",
+            "Aksi regenerates Files/index.html and the viewer prefers saved host-refined models.",
+        ],
+        "refined_model_schema": {
+            "nodes": [
+                {
+                    "id": "stable id",
+                    "name": "display name",
+                    "type": "architecture_component or runtime_step",
+                    "summary": "short explanation",
+                    "responsibility": "owned job",
+                    "how_it_works": "grounded behavior",
+                    "relationships": "important connected pieces",
+                    "change_risk": "low, medium, or high",
+                    "confidence": "high, medium, or low",
+                }
+            ],
+            "edges": [{"source": "node id", "target": "node id", "label": "relationship"}],
+        },
         "next_steps": [
             "Give the user viewer_http_url when present; otherwise give viewer_url.",
             "Call get_map to inspect the generated graph.",
             "For each summary target where needs_summary is true, call get_context and use the host LLM to write the explanation.",
             "Call save_summary for each written explanation so the viewer can show it on rectangle click.",
+            "For final Architecture and Runtime Flow tabs, use host LLM context to call save_architecture_model and save_runtime_model.",
         ],
     }
 
@@ -658,6 +788,41 @@ def list_summaries(path: str = ".") -> dict[str, Any]:
     _write_static_viewer(repo, refresh_stale_flags(load_architecture(repo), repo))
     index_path = _summary_index_path(repo)
     return json.loads(index_path.read_text(encoding="utf-8"))
+
+
+@mcp.tool
+def save_architecture_model(model: Any, path: str = ".") -> dict[str, Any]:
+    """Persist a host-LLM refined project architecture model for the viewer."""
+    repo = _repo(path)
+    try:
+        return _save_refined_model(repo, "architecture", model)
+    except (TypeError, ValueError) as error:
+        return {"error": str(error), "model_type": "architecture"}
+
+
+@mcp.tool
+def save_runtime_model(model: Any, path: str = ".") -> dict[str, Any]:
+    """Persist a host-LLM refined runtime/input-flow model for the viewer."""
+    repo = _repo(path)
+    try:
+        return _save_refined_model(repo, "runtime", model)
+    except (TypeError, ValueError) as error:
+        return {"error": str(error), "model_type": "runtime"}
+
+
+@mcp.tool
+def get_models(path: str = ".") -> dict[str, Any]:
+    """Return saved host-refined architecture and runtime models."""
+    repo = _repo(path)
+    return _read_models(repo)
+
+
+@mcp.tool
+def stop_viewer(path: str = ".") -> dict[str, Any]:
+    """Stop the local viewer server for a repository if one is running."""
+    repo = _repo(path)
+    stopped = _stop_viewer_server(repo)
+    return {"path": str(repo), "stopped": stopped}
 
 
 def main() -> None:

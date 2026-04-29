@@ -286,6 +286,7 @@
     let currentDiagramEdges = [];
     let selectedNodeId = null;
     let summaryIndex = {};
+    let refinedModels = {};
     document.body.dataset.view = currentView;
 
     function nodeArray(graph) {
@@ -566,6 +567,8 @@
     }
 
     function buildRuntimeFlow(graph) {
+      const refined = buildRefinedModel("runtime", "runtime step");
+      if (refined) return refined;
       return dependencyItems(graph, "runtime module");
     }
 
@@ -589,6 +592,9 @@
     }
 
     function buildArchitectureView(graph) {
+      const refined = buildRefinedModel("architecture", "architecture component");
+      if (refined) return refined;
+
       const components = (graph.components || []).map(component => ({
         ...component,
         children: [],
@@ -621,6 +627,48 @@
         measureNode(component);
       });
       return { items: components, edges };
+    }
+
+    function buildRefinedModel(modelType, kindLabel) {
+      const model = refinedModels?.[modelType];
+      if (!model || !Array.isArray(model.nodes) || !model.nodes.length) {
+        return null;
+      }
+      const items = model.nodes.map(node => ({
+        ...node,
+        children: [],
+        path: node.path || node.id,
+        kindLabel: node.kindLabel || kindLabel,
+        showKindLabel: true,
+        detail: node.summary || node.detail,
+      }));
+      const ids = new Set(items.map(item => item.id));
+      const edges = (model.edges || [])
+        .filter(edge => ids.has(edge.source) && ids.has(edge.target))
+        .map((edge, index) => ({
+          ...edge,
+          id: edge.id || `${modelType}-edge:${index + 1}`,
+          type: edge.type || "host_refined",
+          import_text: edge.label || edge.import_text || "host-refined relationship",
+        }));
+      const levelById = new Map(items.map(item => [item.id, 0]));
+      for (let pass = 0; pass < items.length; pass += 1) {
+        let changed = false;
+        for (const edge of edges) {
+          const sourceLevel = levelById.get(edge.source) || 0;
+          const targetLevel = levelById.get(edge.target) || 0;
+          if (targetLevel <= sourceLevel) {
+            levelById.set(edge.target, sourceLevel + 1);
+            changed = true;
+          }
+        }
+        if (!changed) break;
+      }
+      items.forEach(item => {
+        item.level = clamp(levelById.get(item.id) || 0, 0, 8);
+        measureNode(item);
+      });
+      return { items, edges, refined: true, model };
     }
 
     function layoutArchitectureItems(items) {
@@ -736,19 +784,34 @@
         const summary = saved.summary;
         if (typeof summary === "string") {
           return {
-            what: summary,
-            why: saved.stale ? "This saved LLM summary may be stale because the source file changed." : "This was saved by the LLM host for reuse.",
-            how: "The LLM host read exact source through Aksi MCP get_context, then persisted this explanation with save_summary.",
-            role: "Cached context for future questions about this rectangle.",
+            summary: summary,
+            responsibility: saved.stale ? "This saved LLM summary may be stale because the source file changed." : "This was saved by the LLM host for reuse.",
+            how_it_works: "The LLM host read exact source through Aksi MCP get_context, then persisted this explanation with save_summary.",
+            relationships: "Cached context for future questions about this rectangle.",
+            change_risk: "unknown",
+            confidence: "unknown",
             source: saved.stale ? "Saved LLM summary (stale)" : "Saved LLM summary",
           };
         }
         return {
-          what: summary.what || summary.summary || "Saved LLM summary is available for this rectangle.",
-          why: summary.why || (saved.stale ? "This saved summary may be stale because the source file changed." : "This saved summary reduces repeated context reading."),
-          how: summary.how || "The LLM host produced this after reading exact code through Aksi MCP get_context.",
-          role: summary.role || "Cached explanation for future LLM and user context.",
+          summary: summary.summary || summary.what || "Saved LLM summary is available for this rectangle.",
+          responsibility: summary.responsibility || summary.why_it_matters || summary.why || (saved.stale ? "This saved summary may be stale because the source file changed." : "This saved summary reduces repeated context reading."),
+          how_it_works: summary.how_it_works || summary.how || "The LLM host produced this after reading exact code through Aksi MCP get_context.",
+          relationships: summary.relationships || summary.role || "Cached explanation for future LLM and user context.",
+          change_risk: summary.change_risk || "unknown",
+          confidence: summary.confidence || "unknown",
           source: saved.stale ? "Saved LLM summary (stale)" : "Saved LLM summary",
+        };
+      }
+      if (node.summary || node.responsibility || node.how_it_works || node.relationships) {
+        return {
+          summary: node.summary || node.detail || `${node.name} is part of the host-refined ${currentView} model.`,
+          responsibility: node.responsibility || node.why || "Defined by the host-refined model.",
+          how_it_works: node.how_it_works || node.how || "The host LLM produced this model after reading Aksi context.",
+          relationships: node.relationships || node.role || `${incoming.length} incoming and ${outgoing.length} outgoing relationship${incoming.length + outgoing.length === 1 ? "" : "s"}.`,
+          change_risk: node.change_risk || "unknown",
+          confidence: node.confidence || "unknown",
+          source: "Host-refined model",
         };
       }
       if (currentView === "architecture") {
@@ -786,14 +849,18 @@
         `<h2>${escapeHtml(node.name)}</h2>`,
         `<p>${escapeHtml(meta)}</p>`,
         `<p>${escapeHtml(summary.source)}</p>`,
-        "<h3>What It Is</h3>",
-        `<p>${escapeHtml(summary.what)}</p>`,
-        "<h3>Why We Need It</h3>",
-        `<p>${escapeHtml(summary.why)}</p>`,
+        "<h3>Summary</h3>",
+        `<p>${escapeHtml(summary.summary || summary.what)}</p>`,
+        "<h3>Responsibility</h3>",
+        `<p>${escapeHtml(summary.responsibility || summary.why)}</p>`,
         "<h3>How It Works</h3>",
-        `<p>${escapeHtml(summary.how)}</p>`,
-        "<h3>Role</h3>",
-        `<p>${escapeHtml(summary.role)}</p>`,
+        `<p>${escapeHtml(summary.how_it_works || summary.how)}</p>`,
+        "<h3>Relationships</h3>",
+        `<p>${escapeHtml(summary.relationships || summary.role)}</p>`,
+        "<h3>Change Risk</h3>",
+        `<p>${escapeHtml(summary.change_risk || "unknown")}</p>`,
+        "<h3>Confidence</h3>",
+        `<p>${escapeHtml(summary.confidence || "unknown")}</p>`,
         `<p>${edges.length} connected edge${edges.length === 1 ? "" : "s"} · ${outgoing.length} out · ${incoming.length} in</p>`,
       ].join("");
     }
@@ -912,7 +979,7 @@
     }
 
     function renderArchitecture(graph) {
-      const { items, edges } = buildArchitectureView(graph);
+      const { items, edges, refined } = buildArchitectureView(graph);
       layoutArchitectureItems(items);
 
       const bounds = graphBounds(items.map(data => ({ data })));
@@ -982,14 +1049,16 @@
       svg.call(zoomBehavior);
       svg.call(zoomBehavior.transform, fitTransform(bounds));
 
-      const componentMode = (graph.components || []).length > 0;
-      meta.textContent = componentMode
+      const componentMode = refined || (graph.components || []).length > 0;
+      meta.textContent = refined
+        ? `${items.length} host-refined architecture components · ${edges.length} relationships`
+        : componentMode
         ? `${items.length} architecture components · ${edges.length} component relationships · local-first candidates`
         : `${items.length} architecture modules · ${edges.length} dependency relationships · local-first analysis`;
     }
 
     function renderRuntimeFlow(graph) {
-      const { items, edges } = buildRuntimeFlow(graph);
+      const { items, edges, refined } = buildRuntimeFlow(graph);
       layoutRuntimeItems(items);
 
       const bounds = graphBounds(items.map(data => ({ data })));
@@ -1059,7 +1128,9 @@
       svg.call(zoomBehavior);
       svg.call(zoomBehavior.transform, fitTransform(bounds));
 
-      meta.textContent = `${items.length} runtime modules · ${edges.length} import-flow edges`;
+      meta.textContent = refined
+        ? `${items.length} host-refined runtime steps · ${edges.length} flow relationships`
+        : `${items.length} runtime modules · ${edges.length} static import-flow edges`;
     }
 
     function render(graph) {
@@ -1138,7 +1209,15 @@
       return window.__AKSI_ARCHITECTURE__ ? "context/index.json" : "../Files/context/index.json";
     }
 
+    function modelsUrl() {
+      return window.__AKSI_ARCHITECTURE__ ? "context/models.json" : "../Files/context/models.json";
+    }
+
     async function refreshSummaries() {
+      if (window.location.protocol === "file:" && window.__AKSI_SUMMARIES__) {
+        summaryIndex = window.__AKSI_SUMMARIES__.summaries || {};
+        return true;
+      }
       try {
         const response = await fetch(summaryIndexUrl(), { cache: "no-store" });
         if (!response.ok) return false;
@@ -1150,22 +1229,43 @@
       }
     }
 
-    function boot(graph, summaries = {}) {
+    async function refreshModels() {
+      if (window.location.protocol === "file:" && window.__AKSI_MODELS__) {
+        refinedModels = window.__AKSI_MODELS__.models || {};
+        return true;
+      }
+      try {
+        const response = await fetch(modelsUrl(), { cache: "no-store" });
+        if (!response.ok) return false;
+        const payload = await response.json();
+        refinedModels = payload?.models || {};
+        return true;
+      } catch (_error) {
+        return false;
+      }
+    }
+
+    function boot(graph, summaries = {}, models = {}) {
       assertValidGraph(graph);
       summaryIndex = summaries?.summaries || {};
+      refinedModels = models?.models || {};
       currentGraph = graph;
       render(graph);
       refreshSummaries();
+      refreshModels().then(refreshed => {
+        if (refreshed && currentGraph) render(currentGraph);
+      });
     }
 
     if (window.__AKSI_ARCHITECTURE__) {
-      boot(window.__AKSI_ARCHITECTURE__, window.__AKSI_SUMMARIES__ || {});
+      boot(window.__AKSI_ARCHITECTURE__, window.__AKSI_SUMMARIES__ || {}, window.__AKSI_MODELS__ || {});
     } else {
       fetch("../Files/architecture.json", { cache: "no-store" })
         .then(async response => {
           if (!response.ok) throw new Error(`HTTP ${response.status}`);
           const graph = await response.json();
           let summariesPayload = {};
+          let modelsPayload = {};
           try {
             const summaries = await fetch("../Files/context/index.json", { cache: "no-store" });
             if (summaries.ok) {
@@ -1174,10 +1274,18 @@
           } catch (_error) {
             summariesPayload = {};
           }
-          return { graph, summariesPayload };
+          try {
+            const models = await fetch("../Files/context/models.json", { cache: "no-store" });
+            if (models.ok) {
+              modelsPayload = await models.json();
+            }
+          } catch (_error) {
+            modelsPayload = {};
+          }
+          return { graph, summariesPayload, modelsPayload };
         })
-        .then(({ graph, summariesPayload }) => {
-          boot(graph, summariesPayload);
+        .then(({ graph, summariesPayload, modelsPayload }) => {
+          boot(graph, summariesPayload, modelsPayload);
         })
         .catch(error => {
           meta.textContent = "Could not load ../Files/architecture.json";
