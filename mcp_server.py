@@ -300,6 +300,7 @@ def save_summary(node_id: str, summary: Any, path: str = ".") -> dict[str, Any]:
     output_path = _summary_path(repo, node_id)
     output_path.write_text(payload, encoding="utf-8")
     _write_summary_index(repo)
+    _write_static_viewer(repo, refresh_stale_flags(load_architecture(repo), repo))
     return {"saved": True, "summary_file": str(output_path), "record": record}
 
 

@@ -1065,6 +1065,11 @@
           }
         }
         updateDetails(selected, graph);
+        refreshSummaries().then(refreshed => {
+          if (refreshed && selectedNodeId === selected.id) {
+            updateDetails(selected, graph);
+          }
+        });
       } else {
         details.classList.remove("open");
         details.innerHTML = "";
@@ -1084,11 +1089,28 @@
       button.addEventListener("click", () => setViewMode(button.dataset.view));
     });
 
+    function summaryIndexUrl() {
+      return window.__AKSI_ARCHITECTURE__ ? "context/index.json" : "../Files/context/index.json";
+    }
+
+    async function refreshSummaries() {
+      try {
+        const response = await fetch(summaryIndexUrl(), { cache: "no-store" });
+        if (!response.ok) return false;
+        const payload = await response.json();
+        summaryIndex = payload?.summaries || {};
+        return true;
+      } catch (_error) {
+        return false;
+      }
+    }
+
     function boot(graph, summaries = {}) {
       assertValidGraph(graph);
       summaryIndex = summaries?.summaries || {};
       currentGraph = graph;
       render(graph);
+      refreshSummaries();
     }
 
     if (window.__AKSI_ARCHITECTURE__) {
