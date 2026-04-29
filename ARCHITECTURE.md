@@ -87,9 +87,10 @@ It lets an AI host call local tools instead of doing heavy repo analysis by itse
 
 Current MCP tools:
 
-- `generate_visualization(path=".", summarize=True, serve_viewer=True)`
+- `generate_visualization(path=".", summarize=True, prepare_summary_targets=None, serve_viewer=True)`
 - `scan_repo(path=".")`
 - `get_map(path=".")`
+- `get_summary_worklist(path=".")`
 - `get_context(node_id, path=".")`
 - `save_summary(node_id, summary, path=".")`
 - `get_summary(node_id, path=".")`
@@ -217,7 +218,7 @@ When connected to an MCP host, the intended workflow is:
 User asks host to visualize or explain a repo
       |
       v
-Host calls generate_visualization(path, summarize=True, serve_viewer=True)
+Host calls generate_visualization(path, prepare_summary_targets=True, serve_viewer=True)
       |
       v
 Aksi scans locally, preserves summaries, writes architecture.json and index.html

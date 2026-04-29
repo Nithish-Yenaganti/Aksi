@@ -17,7 +17,11 @@ def test_mcp_helpers_return_expected_shapes(tmp_path: Path) -> None:
     assert scan_summary["viewer_url"].startswith("file://")
     assert "viewer_http_url" in scan_summary
     assert "viewer_http_error" in scan_summary
-    assert scan_summary["summary_mode"] == "host_llm"
+    assert scan_summary["summary_mode"] == "host_llm_worklist"
+    assert scan_summary["summary_behavior"]["automatic_summaries"] is False
+    assert scan_summary["summary_behavior"]["written_by_aksi"] == 0
+    assert scan_summary["host_llm_required"] is True
+    assert scan_summary["summary_status"]["work_items"] == len(scan_summary["summary_worklist"])
     root_target = next(target for target in scan_summary["summary_targets"]["structure"] if target["node_id"] == graph["root"])
     file_target = next(target for target in scan_summary["summary_targets"]["structure"] if target["node_id"] == file_node["id"])
     assert root_target["needs_summary"] is True
@@ -219,11 +223,13 @@ def test_host_refined_models_are_saved_and_embedded_in_viewer(tmp_path: Path) ->
                 "id": "arch:entry",
                 "name": "Entry Layer",
                 "type": "architecture_component",
-                "summary": "Receives requests.",
-                "responsibility": "Start the workflow.",
-                "how_it_works": "Calls local code discovered by Aksi.",
-                "relationships": "Connects to core.",
+                "purpose": "Receives requests.",
+                "behavior": "Starts the workflow.",
+                "interfaces": "Public entrypoint.",
+                "dependencies": "Core logic.",
+                "used_by": "External callers.",
                 "change_risk": "medium",
+                "open_questions": "Confirm external callers.",
                 "confidence": "high",
             },
             {"id": "arch:core", "name": "Core Logic", "type": "architecture_component"},
@@ -268,20 +274,23 @@ def test_generate_visualization_returns_host_llm_summary_targets(tmp_path: Path)
     architecture_ids = {target["node_id"] for target in result["summary_targets"]["architecture"]}
     runtime_ids = {target["node_id"] for target in result["summary_targets"]["runtime"]}
 
-    assert result["summary_mode"] == "host_llm"
+    assert result["summary_mode"] == "host_llm_worklist"
     assert graph["root"] in structure_ids
     assert component_ids.issubset(architecture_ids)
     assert "file:mcp_server.py" in runtime_ids
     assert "file:graph.py" in runtime_ids
     assert "save_summary" in " ".join(result["next_steps"])
-    assert "structure" in " ".join(result["summary_workflow"])
-    assert "needs_summary" in " ".join(result["summary_workflow"])
+    assert "summary_worklist" in " ".join(result["summary_workflow"])
+    assert result["summary_worklist"]
+    assert len({target["node_id"] for target in result["summary_worklist"]}) == len(result["summary_worklist"])
     assert set(result["summary_schema"]) == {
-        "summary",
-        "responsibility",
-        "how_it_works",
-        "relationships",
+        "purpose",
+        "behavior",
+        "interfaces",
+        "dependencies",
+        "used_by",
         "change_risk",
+        "open_questions",
         "confidence",
     }
 
@@ -293,6 +302,41 @@ def test_generate_visualization_can_disable_summary_targets(tmp_path: Path) -> N
 
     assert result["summary_mode"] == "disabled"
     assert result["summary_targets"] == {"structure": [], "architecture": [], "runtime": []}
+    assert result["summary_worklist"] == []
+    assert result["host_llm_required"] is False
+
+
+def test_generate_visualization_prepare_summary_targets_alias(tmp_path: Path) -> None:
+    (tmp_path / "app.py").write_text("def run():\n    return 1\n", encoding="utf-8")
+
+    disabled = mcp_server.generate_visualization(str(tmp_path), summarize=True, prepare_summary_targets=False)
+    enabled = mcp_server.generate_visualization(str(tmp_path), summarize=False, prepare_summary_targets=True)
+
+    assert disabled["summary_mode"] == "disabled"
+    assert disabled["summary_worklist"] == []
+    assert enabled["summary_mode"] == "host_llm_worklist"
+    assert enabled["summary_worklist"]
+
+
+def test_get_summary_worklist_returns_deduplicated_missing_and_stale_nodes(tmp_path: Path) -> None:
+    source = tmp_path / "app.py"
+    source.write_text("def run():\n    return 1\n", encoding="utf-8")
+
+    first = mcp_server.generate_visualization(str(tmp_path))
+    file_item = next(item for item in first["summary_worklist"] if item["type"] == "file")
+    mcp_server.save_summary(file_item["node_id"], {"summary": "app module"}, str(tmp_path))
+
+    second = mcp_server.get_summary_worklist(str(tmp_path))
+    second_ids = {item["node_id"] for item in second["summary_worklist"]}
+    assert file_item["node_id"] not in second_ids
+
+    source.write_text("def run():\n    return 2\n", encoding="utf-8")
+    third = mcp_server.get_summary_worklist(str(tmp_path))
+    third_by_id = {item["node_id"]: item for item in third["summary_worklist"]}
+
+    assert third_by_id[file_item["node_id"]]["summary_status"] == "stale"
+    assert third_by_id[file_item["node_id"]]["action"] == "refresh"
+    assert len(third_by_id) == len(third["summary_worklist"])
 
 
 def test_summary_targets_skip_fresh_and_refresh_changed_nodes(tmp_path: Path) -> None:

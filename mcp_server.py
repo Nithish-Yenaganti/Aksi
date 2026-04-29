@@ -587,6 +587,55 @@ def _empty_summary_targets() -> dict[str, list[dict[str, Any]]]:
     return {"structure": [], "architecture": [], "runtime": []}
 
 
+def _summary_worklist(summary_targets: dict[str, list[dict[str, Any]]]) -> list[dict[str, Any]]:
+    work_by_node: dict[str, dict[str, Any]] = {}
+    for view, targets in summary_targets.items():
+        for target in targets:
+            if not target.get("needs_summary"):
+                continue
+            node_id = target.get("node_id")
+            if not node_id:
+                continue
+            if node_id not in work_by_node:
+                work_by_node[node_id] = {
+                    **target,
+                    "views": [view],
+                    "reasons": [target.get("reason")],
+                }
+            else:
+                work = work_by_node[node_id]
+                work["views"].append(view)
+                work["reasons"].append(target.get("reason"))
+                work["priority"] = min(work.get("priority", 999), target.get("priority", 999))
+                if work.get("summary_status") != "stale" and target.get("summary_status") == "stale":
+                    work["summary_status"] = "stale"
+                    work["action"] = "refresh"
+    return sorted(work_by_node.values(), key=lambda item: (item.get("priority", 999), item.get("node_id", "")))
+
+
+def _summary_status(summary_targets: dict[str, list[dict[str, Any]]], worklist: list[dict[str, Any]]) -> dict[str, Any]:
+    status_counts = {"fresh": 0, "missing": 0, "stale": 0}
+    by_view: dict[str, dict[str, int]] = {}
+    for view, targets in summary_targets.items():
+        view_counts = {"fresh": 0, "missing": 0, "stale": 0}
+        for target in targets:
+            status = target.get("summary_status")
+            if status in status_counts:
+                status_counts[status] += 1
+                view_counts[status] += 1
+        by_view[view] = {
+            **view_counts,
+            "total": len(targets),
+            "needs_summary": sum(1 for target in targets if target.get("needs_summary")),
+        }
+    return {
+        **status_counts,
+        "total_targets": sum(len(targets) for targets in summary_targets.values()),
+        "work_items": len(worklist),
+        "by_view": by_view,
+    }
+
+
 def _scan_repository(
     repo: Path,
     preserved_summary_records: dict[str, Any] | None = None,
@@ -613,14 +662,18 @@ def scan_repo(path: str = ".") -> dict[str, Any]:
 def generate_visualization(
     path: str = ".",
     summarize: bool = True,
+    prepare_summary_targets: bool | None = None,
     serve_viewer: bool = True,
 ) -> dict[str, Any]:
     """Generate the architecture map for UI/MCP use without requiring users to run aksi.py."""
     repo = _repo(path)
+    should_prepare_summaries = summarize if prepare_summary_targets is None else prepare_summary_targets
     preserved_summary_records = _summary_records_from_disk(repo)
     result, architecture = _scan_repository(repo, preserved_summary_records)
     architecture = refresh_stale_flags(architecture, repo)
-    summary_targets = _summary_targets(repo, architecture) if summarize else _empty_summary_targets()
+    summary_targets = _summary_targets(repo, architecture) if should_prepare_summaries else _empty_summary_targets()
+    summary_worklist = _summary_worklist(summary_targets)
+    summary_status = _summary_status(summary_targets, summary_worklist)
     viewer_file = _write_static_viewer(repo, architecture)
     viewer_http_url = None
     viewer_http_error = None
@@ -637,22 +690,30 @@ def generate_visualization(
         "viewer_http_error": viewer_http_error,
         "summary_index_file": str(_summary_index_path(repo)),
         "summary_targets": summary_targets,
-        "summary_mode": "host_llm" if summarize else "disabled",
+        "summary_worklist": summary_worklist,
+        "summary_status": summary_status,
+        "summary_mode": "host_llm_worklist" if should_prepare_summaries else "disabled",
+        "summary_behavior": {
+            "automatic_summaries": False,
+            "written_by_aksi": 0,
+            "parameter_note": "summarize/prepare_summary_targets prepares host-LLM work items; it does not call an LLM or write summaries.",
+        },
+        "host_llm_required": bool(summary_worklist),
         "summary_workflow": [
-            "for view in ['structure', 'architecture', 'runtime']:",
-            "  for target in summary_targets[view]:",
-            "    if not target['needs_summary']: continue",
+            "for target in summary_worklist:",
             "    context = get_context(target['node_id'], path)",
             "    summary = host_llm_write_summary(context)",
             "    save_summary(target['node_id'], summary, path)",
         ],
         "summary_schema": {
-            "summary": "One or two sentences describing this rectangle.",
-            "responsibility": "The job this node owns in the project.",
-            "how_it_works": "Concrete behavior grounded in get_context output.",
-            "relationships": "Important callers, dependencies, child nodes, or connected modules.",
-            "change_risk": "low, medium, or high, with a short reason.",
-            "confidence": "high, medium, or low based on available context.",
+            "purpose": "What this node is for in one sentence.",
+            "behavior": "What it actually does, grounded in get_context output.",
+            "interfaces": "Important functions, classes, inputs, outputs, commands, or MCP tools exposed here.",
+            "dependencies": "Key upstream/downstream files, modules, services, or data it relies on.",
+            "used_by": "Known callers, views, workflows, or project areas that depend on it.",
+            "change_risk": "low, medium, or high, with the reason a future agent should care.",
+            "open_questions": "Important unknowns or cases where the source should be reopened.",
+            "confidence": "high, medium, or low based on how complete the returned context was.",
         },
         "refinement_workflow": [
             "Use local Architecture and Runtime Flow as candidates only.",
@@ -667,11 +728,13 @@ def generate_visualization(
                     "id": "stable id",
                     "name": "display name",
                     "type": "architecture_component or runtime_step",
-                    "summary": "short explanation",
-                    "responsibility": "owned job",
-                    "how_it_works": "grounded behavior",
-                    "relationships": "important connected pieces",
+                    "purpose": "short explanation",
+                    "behavior": "grounded behavior",
+                    "interfaces": "important exposed surfaces",
+                    "dependencies": "important connected pieces",
+                    "used_by": "known consumers",
                     "change_risk": "low, medium, or high",
+                    "open_questions": "what future agents should verify",
                     "confidence": "high, medium, or low",
                 }
             ],
@@ -680,7 +743,7 @@ def generate_visualization(
         "next_steps": [
             "Give the user viewer_http_url when present; otherwise give viewer_url.",
             "Call get_map to inspect the generated graph.",
-            "For each summary target where needs_summary is true, call get_context and use the host LLM to write the explanation.",
+            "For each item in summary_worklist, call get_context and use the host LLM to write the explanation.",
             "Call save_summary for each written explanation so the viewer can show it on rectangle click.",
             "For final Architecture and Runtime Flow tabs, use host LLM context to call save_architecture_model and save_runtime_model.",
         ],
@@ -694,6 +757,23 @@ def get_map(path: str = ".") -> dict[str, Any]:
     architecture = load_architecture(repo)
     _write_summary_index(repo)
     return refresh_stale_flags(architecture, repo)
+
+
+@mcp.tool
+def get_summary_worklist(path: str = ".") -> dict[str, Any]:
+    """Return the deduplicated host-LLM summary worklist without rescanning."""
+    repo = _repo(path)
+    architecture = refresh_stale_flags(load_architecture(repo), repo)
+    _write_summary_index(repo)
+    summary_targets = _summary_targets(repo, architecture)
+    worklist = _summary_worklist(summary_targets)
+    return {
+        "path": str(repo),
+        "summary_targets": summary_targets,
+        "summary_worklist": worklist,
+        "summary_status": _summary_status(summary_targets, worklist),
+        "host_llm_required": bool(worklist),
+    }
 
 
 @mcp.tool
@@ -791,7 +871,7 @@ def list_summaries(path: str = ".") -> dict[str, Any]:
 
 
 @mcp.tool
-def save_architecture_model(model: Any, path: str = ".") -> dict[str, Any]:
+def save_architecture_model(model: dict[str, Any], path: str = ".") -> dict[str, Any]:
     """Persist a host-LLM refined project architecture model for the viewer."""
     repo = _repo(path)
     try:
@@ -801,7 +881,7 @@ def save_architecture_model(model: Any, path: str = ".") -> dict[str, Any]:
 
 
 @mcp.tool
-def save_runtime_model(model: Any, path: str = ".") -> dict[str, Any]:
+def save_runtime_model(model: dict[str, Any], path: str = ".") -> dict[str, Any]:
     """Persist a host-LLM refined runtime/input-flow model for the viewer."""
     repo = _repo(path)
     try:

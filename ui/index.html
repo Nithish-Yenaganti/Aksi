@@ -8,17 +8,20 @@
   <style>
     :root {
       color-scheme: dark;
-      --bg: #075057;
-      --panel: #053941;
-      --ink: #d2ecf2;
-      --muted: #a8ccd3;
-      --line: #8bcfd7;
-      --stale: #ffd36a;
-      --unused: #ff7f73;
-      --file: #063f47;
-      --folder: #064a53;
-      --symbol: #052f36;
-      --external: #082f35;
+      --bg: #064f85;
+      --blueprint: #0a5f99;
+      --blueprint-dark: #043f6d;
+      --blueprint-deep: #032f55;
+      --paper-line: rgba(240, 250, 255, 0.84);
+      --ink: #edf9ff;
+      --muted: #b9dceb;
+      --line: rgba(240, 250, 255, 0.78);
+      --stale: #f6d46b;
+      --unused: #ff8f7d;
+      --file: rgba(5, 76, 126, 0.88);
+      --folder: rgba(7, 91, 150, 0.9);
+      --symbol: rgba(4, 57, 98, 0.92);
+      --external: rgba(3, 47, 85, 0.86);
     }
 
     * { box-sizing: border-box; }
@@ -27,17 +30,55 @@
       margin: 0;
       overflow: hidden;
       background:
-        radial-gradient(circle at 24% 14%, rgba(210, 236, 242, 0.14), transparent 30%),
-        radial-gradient(circle at 78% 84%, rgba(210, 236, 242, 0.72), transparent 34%),
-        linear-gradient(180deg, #09606d 0%, #075057 48%, #d2ecf2 148%);
+        linear-gradient(rgba(237, 249, 255, 0.055) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(237, 249, 255, 0.055) 1px, transparent 1px),
+        linear-gradient(rgba(237, 249, 255, 0.12) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(237, 249, 255, 0.12) 1px, transparent 1px),
+        radial-gradient(circle at 24% 18%, rgba(237, 249, 255, 0.11), transparent 32%),
+        radial-gradient(circle at 84% 78%, rgba(3, 47, 85, 0.26), transparent 36%),
+        linear-gradient(145deg, var(--blueprint) 0%, var(--blueprint-dark) 54%, var(--blueprint-deep) 100%);
+      background-size:
+        24px 24px,
+        24px 24px,
+        120px 120px,
+        120px 120px,
+        auto,
+        auto,
+        auto;
       color: var(--ink);
-      font: 16px/1.35 ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      font: 16px/1.35 "Courier New", ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+    }
+
+    body::before {
+      content: "";
+      position: fixed;
+      inset: 24px;
+      z-index: 0;
+      pointer-events: none;
+      border: 2px solid rgba(240, 250, 255, 0.72);
+      box-shadow:
+        inset 0 0 0 1px rgba(240, 250, 255, 0.2),
+        0 0 44px rgba(3, 47, 85, 0.5);
+    }
+
+    body::after {
+      content: "";
+      position: fixed;
+      inset: 0;
+      z-index: 0;
+      pointer-events: none;
+      opacity: 0.18;
+      background-image:
+        radial-gradient(circle at 16px 18px, rgba(255, 255, 255, 0.8) 0 0.8px, transparent 1px),
+        radial-gradient(circle at 74px 64px, rgba(255, 255, 255, 0.45) 0 0.7px, transparent 1px);
+      background-size: 96px 96px, 132px 132px;
+      mix-blend-mode: screen;
     }
 
     #toolbar {
       position: fixed;
       inset: 12px 12px auto 12px;
-      z-index: 2;
+      z-index: 3;
       display: flex;
       align-items: center;
       justify-content: space-between;
@@ -48,17 +89,20 @@
     #toolbar > div {
       min-width: 0;
       padding: 10px 12px;
-      border: 1px solid rgba(210, 236, 242, 0.24);
-      border-radius: 8px;
-      background: color-mix(in srgb, var(--panel) 88%, transparent);
-      box-shadow: 0 12px 40px rgba(2, 36, 42, 0.4);
+      border: 1.5px solid rgba(240, 250, 255, 0.66);
+      border-radius: 0;
+      background: rgba(4, 63, 109, 0.78);
+      box-shadow:
+        inset 0 0 0 1px rgba(240, 250, 255, 0.12),
+        0 10px 24px rgba(3, 47, 85, 0.36);
       pointer-events: auto;
     }
 
     #toolName {
       font-weight: 700;
-      letter-spacing: 0;
+      letter-spacing: 0.06em;
       white-space: nowrap;
+      text-transform: uppercase;
     }
 
     #repoName {
@@ -74,13 +118,13 @@
       position: fixed;
       left: 12px;
       bottom: 12px;
-      z-index: 2;
+      z-index: 3;
       max-width: min(760px, calc(100vw - 24px));
       padding: 10px 12px;
-      border: 1px solid rgba(210, 236, 242, 0.24);
-      border-radius: 8px;
-      background: color-mix(in srgb, var(--panel) 88%, transparent);
-      box-shadow: 0 12px 40px rgba(2, 36, 42, 0.4);
+      border: 1.5px solid rgba(240, 250, 255, 0.58);
+      border-radius: 0;
+      background: rgba(4, 63, 109, 0.78);
+      box-shadow: inset 0 0 0 1px rgba(240, 250, 255, 0.1), 0 10px 24px rgba(3, 47, 85, 0.36);
       color: var(--muted);
       overflow: hidden;
       text-overflow: ellipsis;
@@ -96,7 +140,7 @@
     #viewModes button {
       appearance: none;
       border: 1px solid transparent;
-      border-radius: 6px;
+      border-radius: 0;
       background: transparent;
       color: var(--muted);
       cursor: pointer;
@@ -106,8 +150,8 @@
     }
 
     #viewModes button.active {
-      border-color: rgba(210, 236, 242, 0.4);
-      background: #075057;
+      border-color: rgba(240, 250, 255, 0.72);
+      background: rgba(237, 249, 255, 0.12);
       color: var(--ink);
     }
 
@@ -116,15 +160,15 @@
       position: fixed;
       right: 12px;
       bottom: 12px;
-      z-index: 2;
+      z-index: 3;
       width: min(380px, calc(100vw - 24px));
       max-height: 45vh;
       overflow: auto;
       padding: 12px;
-      border: 1px solid rgba(210, 236, 242, 0.24);
-      border-radius: 8px;
-      background: color-mix(in srgb, var(--panel) 92%, transparent);
-      box-shadow: 0 12px 40px rgba(2, 36, 42, 0.42);
+      border: 1.5px solid rgba(240, 250, 255, 0.66);
+      border-radius: 0;
+      background: rgba(3, 47, 85, 0.9);
+      box-shadow: inset 0 0 0 1px rgba(240, 250, 255, 0.1), 0 12px 32px rgba(3, 47, 85, 0.52);
     }
 
     #details.open {
@@ -154,17 +198,19 @@
       width: 100vw;
       height: 100vh;
       display: block;
+      position: relative;
+      z-index: 1;
     }
 
     .node rect {
-      stroke: rgba(210, 236, 242, 0.28);
-      stroke-width: 1.15;
-      fill-opacity: 0.96;
+      stroke: var(--paper-line);
+      stroke-width: 1.35;
+      fill-opacity: 0.82;
       cursor: pointer;
-      filter: drop-shadow(0 0 9px rgba(210, 236, 242, 0.18));
+      filter: drop-shadow(0 0 2px rgba(240, 250, 255, 0.32));
     }
 
-    .node.repo rect { fill: #06464f; stroke: #d2ecf2; }
+    .node.repo rect { fill: rgba(7, 91, 150, 0.7); stroke: #f0faff; stroke-width: 2; }
     .node.folder rect { fill: var(--folder); }
     .node.file rect { fill: var(--file); }
     .node.function rect,
@@ -173,17 +219,17 @@
     .node.struct rect,
     .node.type rect { fill: var(--symbol); }
     .node.external rect { fill: var(--external); stroke-dasharray: 4 3; }
-    .node.component rect { fill: #075057; stroke: #b9e0e7; }
-    .node.input rect { fill: #06464f; stroke: #d2ecf2; }
-    .node.process rect { fill: #053941; stroke: #8bcfd7; }
-    .node.artifact rect { fill: #075057; stroke: #b9e0e7; }
-    .node.consumer rect { fill: #0a6068; stroke: #d2ecf2; }
+    .node.component rect { fill: rgba(8, 100, 161, 0.72); stroke: #f0faff; }
+    .node.input rect { fill: rgba(7, 91, 150, 0.74); stroke: #f0faff; }
+    .node.process rect { fill: rgba(4, 63, 109, 0.8); stroke: #d8f2fa; }
+    .node.artifact rect { fill: rgba(8, 100, 161, 0.72); stroke: #f0faff; }
+    .node.consumer rect { fill: rgba(11, 113, 177, 0.72); stroke: #f0faff; }
     .node.stale rect { stroke: var(--stale); stroke-width: 2.5; }
     .node.unused rect {
       stroke: var(--unused);
       stroke-width: 2.8;
       stroke-dasharray: 8 4;
-      fill: #3d2525;
+      fill: rgba(92, 38, 44, 0.76);
     }
     .node.selected rect { stroke: #ffffff; stroke-width: 3; }
     .node.connected rect { stroke: #d2ecf2; stroke-width: 2.5; }
@@ -192,16 +238,16 @@
       fill: var(--ink);
       pointer-events: none;
       text-anchor: middle;
-      font-size: 16px;
-      font-weight: 500;
-      letter-spacing: 0;
+      font-size: 15px;
+      font-weight: 700;
+      letter-spacing: 0.02em;
     }
 
     .kind-label {
       fill: var(--muted);
       font-size: 10px;
       font-weight: 700;
-      letter-spacing: 0;
+      letter-spacing: 0.08em;
       text-transform: uppercase;
     }
 
@@ -212,17 +258,17 @@
     .edge {
       fill: none;
       stroke: var(--line);
-      stroke-width: 1.75;
-      stroke-opacity: 0.62;
+      stroke-width: 1.35;
+      stroke-opacity: 0.72;
       pointer-events: none;
     }
 
-    .edge.hierarchy { stroke: #b8e2e8; stroke-opacity: 0.68; stroke-width: 2; }
+    .edge.hierarchy { stroke: #f0faff; stroke-opacity: 0.62; stroke-width: 1.5; }
     .edge.import {
       marker-end: url(#arrow-flow);
-      stroke: #d2ecf2;
-      stroke-opacity: 0.52;
-      stroke-width: 1.8;
+      stroke: #f0faff;
+      stroke-opacity: 0.58;
+      stroke-width: 1.5;
     }
 
     .edge.active {
@@ -240,7 +286,7 @@
 </head>
 <body>
   <div id="toolbar">
-    <div id="toolName">Aksi </div>
+    <div id="toolName">Aksi Blueprint</div>
     <div id="viewModes" aria-label="Map view mode">
       <button type="button" data-view="structure" class="active">Structure</button>
       <button type="button" data-view="architecture">Architecture</button>
@@ -266,7 +312,7 @@
       .attr("orient", "auto-start-reverse")
       .append("path")
       .attr("d", "M 0 0 L 10 5 L 0 10 z")
-      .attr("fill", "#d2ecf2");
+      .attr("fill", "#f0faff");
 
     const viewport = svg.append("g").attr("class", "viewport");
     const hierarchyEdgeLayer = viewport.append("g").attr("class", "hierarchy-edges");
@@ -784,32 +830,38 @@
         const summary = saved.summary;
         if (typeof summary === "string") {
           return {
-            summary: summary,
-            responsibility: saved.stale ? "This saved LLM summary may be stale because the source file changed." : "This was saved by the LLM host for reuse.",
-            how_it_works: "The LLM host read exact source through Aksi MCP get_context, then persisted this explanation with save_summary.",
-            relationships: "Cached context for future questions about this rectangle.",
+            purpose: summary,
+            behavior: saved.stale ? "This saved LLM summary may be stale because the source file changed." : "This was saved by the LLM host for reuse.",
+            interfaces: "Unknown from string-only summary.",
+            dependencies: "Unknown from string-only summary.",
+            used_by: "Cached context for future questions about this rectangle.",
             change_risk: "unknown",
+            open_questions: "Open source with get_context if this node is directly relevant to the task.",
             confidence: "unknown",
             source: saved.stale ? "Saved LLM summary (stale)" : "Saved LLM summary",
           };
         }
         return {
-          summary: summary.summary || summary.what || "Saved LLM summary is available for this rectangle.",
-          responsibility: summary.responsibility || summary.why_it_matters || summary.why || (saved.stale ? "This saved summary may be stale because the source file changed." : "This saved summary reduces repeated context reading."),
-          how_it_works: summary.how_it_works || summary.how || "The LLM host produced this after reading exact code through Aksi MCP get_context.",
-          relationships: summary.relationships || summary.role || "Cached explanation for future LLM and user context.",
+          purpose: summary.purpose || summary.summary || summary.what || "Saved LLM summary is available for this rectangle.",
+          behavior: summary.behavior || summary.how_it_works || summary.how || "The LLM host produced this after reading exact code through Aksi MCP get_context.",
+          interfaces: summary.interfaces || "Not specified in saved summary.",
+          dependencies: summary.dependencies || summary.relationships || "Not specified in saved summary.",
+          used_by: summary.used_by || summary.role || "Cached explanation for future LLM and user context.",
           change_risk: summary.change_risk || "unknown",
+          open_questions: summary.open_questions || "None recorded.",
           confidence: summary.confidence || "unknown",
           source: saved.stale ? "Saved LLM summary (stale)" : "Saved LLM summary",
         };
       }
-      if (node.summary || node.responsibility || node.how_it_works || node.relationships) {
+      if (node.purpose || node.behavior || node.summary || node.responsibility || node.how_it_works || node.relationships) {
         return {
-          summary: node.summary || node.detail || `${node.name} is part of the host-refined ${currentView} model.`,
-          responsibility: node.responsibility || node.why || "Defined by the host-refined model.",
-          how_it_works: node.how_it_works || node.how || "The host LLM produced this model after reading Aksi context.",
-          relationships: node.relationships || node.role || `${incoming.length} incoming and ${outgoing.length} outgoing relationship${incoming.length + outgoing.length === 1 ? "" : "s"}.`,
+          purpose: node.purpose || node.summary || node.detail || `${node.name} is part of the host-refined ${currentView} model.`,
+          behavior: node.behavior || node.how_it_works || node.how || "The host LLM produced this model after reading Aksi context.",
+          interfaces: node.interfaces || "Not specified in refined model.",
+          dependencies: node.dependencies || node.relationships || `${incoming.length} incoming and ${outgoing.length} outgoing relationship${incoming.length + outgoing.length === 1 ? "" : "s"}.`,
+          used_by: node.used_by || node.role || "Defined by the host-refined model.",
           change_risk: node.change_risk || "unknown",
+          open_questions: node.open_questions || "None recorded.",
           confidence: node.confidence || "unknown",
           source: "Host-refined model",
         };
@@ -849,16 +901,20 @@
         `<h2>${escapeHtml(node.name)}</h2>`,
         `<p>${escapeHtml(meta)}</p>`,
         `<p>${escapeHtml(summary.source)}</p>`,
-        "<h3>Summary</h3>",
-        `<p>${escapeHtml(summary.summary || summary.what)}</p>`,
-        "<h3>Responsibility</h3>",
-        `<p>${escapeHtml(summary.responsibility || summary.why)}</p>`,
-        "<h3>How It Works</h3>",
-        `<p>${escapeHtml(summary.how_it_works || summary.how)}</p>`,
-        "<h3>Relationships</h3>",
-        `<p>${escapeHtml(summary.relationships || summary.role)}</p>`,
+        "<h3>Purpose</h3>",
+        `<p>${escapeHtml(summary.purpose || summary.summary || summary.what)}</p>`,
+        "<h3>Behavior</h3>",
+        `<p>${escapeHtml(summary.behavior || summary.how_it_works || summary.how)}</p>`,
+        "<h3>Interfaces</h3>",
+        `<p>${escapeHtml(summary.interfaces || "Not specified.")}</p>`,
+        "<h3>Dependencies</h3>",
+        `<p>${escapeHtml(summary.dependencies || summary.relationships || summary.role || "Not specified.")}</p>`,
+        "<h3>Used By</h3>",
+        `<p>${escapeHtml(summary.used_by || "Not specified.")}</p>`,
         "<h3>Change Risk</h3>",
         `<p>${escapeHtml(summary.change_risk || "unknown")}</p>`,
+        "<h3>Open Questions</h3>",
+        `<p>${escapeHtml(summary.open_questions || "None recorded.")}</p>`,
         "<h3>Confidence</h3>",
         `<p>${escapeHtml(summary.confidence || "unknown")}</p>`,
         `<p>${edges.length} connected edge${edges.length === 1 ? "" : "s"} · ${outgoing.length} out · ${incoming.length} in</p>`,
