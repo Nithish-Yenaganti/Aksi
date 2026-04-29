@@ -66,7 +66,10 @@ def main() -> None:
         return
 
     port = find_free_port(args.port)
-    serve(repo, port)
+    try:
+        serve(repo, port)
+    except OSError:
+        serve(repo, find_free_port(0))
 
 
 if __name__ == "__main__":

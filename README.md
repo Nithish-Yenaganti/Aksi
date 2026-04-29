@@ -94,17 +94,19 @@ Available tools:
 - `get_summary(node_id: str, path: str = ".")`
 - `list_summaries(path: str = ".")`
 
-`generate_visualization` also writes a ready local viewer:
+`generate_visualization` also writes a ready local viewer. It returns a localhost URL when Aksi can start the small static viewer server, and always returns a `file://` fallback:
 
 ```text
 /path/to/repo/Files/index.html
+http://127.0.0.1:<port>/index.html
+file:///path/to/repo/Files/index.html
 ```
 
 Normal MCP workflow:
 
 1. The user asks their LLM host to add or inspect the visualization.
 2. The host calls `generate_visualization`; users do not need to run `aksi.py`.
-3. The host gives the user the returned `viewer_url`.
+3. The host gives the user `viewer_http_url` when present, otherwise `viewer_url`.
 4. The host calls `get_context` for exact source before writing any explanation.
 5. The host writes the summary and calls `save_summary`.
 6. Aksi stores summaries under `Files/context/` with file hashes, so `get_summary` can report stale summaries after source changes.
@@ -129,7 +131,7 @@ Then open:
 http://localhost:8000/ui/
 ```
 
-The source viewer loads `../Files/architecture.json`. The MCP-generated `Files/index.html` embeds the generated map directly so an agent can give the user a ready local `file://` link.
+The source viewer loads `../Files/architecture.json`. The MCP-generated `Files/index.html` embeds the generated map directly, and `generate_visualization` returns the best available viewer URL.
 
 ## Development
 

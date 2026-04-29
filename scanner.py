@@ -8,6 +8,7 @@ normalization and resilience.
 from __future__ import annotations
 
 import argparse
+import contextlib
 import hashlib
 import json
 import os
@@ -179,7 +180,12 @@ class ParserRegistry:
         try:
             parser.language = language
         except AttributeError:  # pragma: no cover - older tree-sitter API
-            parser.set_language(language)
+            try:
+                parser.set_language(language)
+            except Exception:
+                return None
+        except Exception:
+            return None
         return parser
 
     def _load_language(self, language_name: str) -> Any | None:
@@ -381,10 +387,21 @@ def scan_repo(repo_path: str | Path = ".") -> ScanResult:
     files_dir.mkdir(exist_ok=True)
     parsers = ParserRegistry()
     scanned: list[ScannedFile] = []
+    errors: list[dict[str, str]] = []
 
-    with shelve.open(str(files_dir / CACHE_BASENAME)) as cache:
+    try:
+        cache_context = shelve.open(str(files_dir / CACHE_BASENAME))
+    except Exception as error:
+        errors.append({"path": str(files_dir / CACHE_BASENAME), "error": str(error)})
+        cache_context = contextlib.nullcontext({})
+
+    with cache_context as cache:
         for source_file in iter_source_files(root):
-            item = scan_file(source_file, root, cache, parsers)
+            try:
+                item = scan_file(source_file, root, cache, parsers)
+            except OSError as error:
+                errors.append({"path": normalized_relpath(source_file, root), "error": str(error)})
+                continue
             scanned.append(item)
             cache[item.path] = item.hash
 
@@ -395,6 +412,7 @@ def scan_repo(repo_path: str | Path = ".") -> ScanResult:
             "version": SCANNER_VERSION,
             "files_scanned": len(scanned),
             "languages": sorted({item.language for item in scanned}),
+            "errors": errors,
         },
     )
 

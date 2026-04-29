@@ -11,7 +11,7 @@ Agents must keep structural analysis local. Do not use an LLM to guess files, sy
 When connected through MCP and the user asks to visualize, refresh, inspect, or explain a project:
 
 1. Call `generate_visualization(path)` for the target repo.
-2. Give the user the returned `viewer_url`.
+2. Give the user `viewer_http_url` when present. If localhost startup is unavailable, give `viewer_url`.
 3. Call `get_map(path)` if you need map counts, node IDs, edges, stale files, or unused markers.
 4. Call `get_context(node_id, path)` before explaining any specific rectangle.
 5. Write the explanation from the exact returned source/context.
@@ -28,7 +28,7 @@ Aksi writes generated files into the scanned repo:
 - `Files/.aksi_cache*`
 - `Files/context/*.json`
 
-`Files/index.html` is the ready viewer for that scanned repo. It embeds the generated map so agents can give the user a direct local `file://` link.
+`Files/index.html` is the ready viewer for that scanned repo. It embeds the generated map. `generate_visualization` tries to start a local static server and returns `viewer_http_url`; if that is unavailable, use the returned `viewer_url`.
 
 Do not commit `Files/`.
 
@@ -68,4 +68,3 @@ Before finishing implementation work, run:
 .venv/bin/python -m py_compile scanner.py graph.py mcp_server.py aksi.py
 .venv/bin/python -m pytest
 ```
-

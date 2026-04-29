@@ -2,16 +2,22 @@
 
 from __future__ import annotations
 
+import functools
+import http.server
 import json
+import socketserver
+import threading
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
+from urllib.parse import quote
 
 from fastmcp import FastMCP
 
 from graph import load_architecture, refresh_stale_flags, slug, summarize_architecture, write_architecture
 
 mcp = FastMCP("Aksi")
+_VIEWER_SERVERS: dict[str, tuple[socketserver.TCPServer, int]] = {}
 
 
 def _aksi_root() -> Path:
@@ -29,7 +35,8 @@ def _context_dir(repo: Path) -> Path:
 
 
 def _summary_path(repo: Path, node_id: str) -> Path:
-    return _context_dir(repo) / f"{slug(node_id)}.json"
+    filename = quote(node_id.strip(), safe="ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_.-") or "root"
+    return _context_dir(repo) / f"{filename}.json"
 
 
 def _summary_index_path(repo: Path) -> Path:
@@ -40,6 +47,19 @@ def _viewer_path(repo: Path) -> Path:
     return repo / "Files" / "index.html"
 
 
+def _viewer_http_url(repo: Path) -> str:
+    key = str(repo)
+    if key not in _VIEWER_SERVERS:
+        handler = functools.partial(http.server.SimpleHTTPRequestHandler, directory=str(repo / "Files"))
+        server = socketserver.ThreadingTCPServer(("127.0.0.1", 0), handler)
+        port = int(server.server_address[1])
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        _VIEWER_SERVERS[key] = (server, port)
+    _server, port = _VIEWER_SERVERS[key]
+    return f"http://127.0.0.1:{port}/index.html"
+
+
 def _utc_now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
@@ -47,19 +67,29 @@ def _utc_now() -> str:
 def _read_json(path: Path, fallback: Any) -> Any:
     if not path.exists():
         return fallback
-    return json.loads(path.read_text(encoding="utf-8"))
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return fallback
+
+
+def _script_json(payload: Any) -> str:
+    return json.dumps(payload).replace("</", "<\\/")
 
 
 def _write_static_viewer(repo: Path, architecture: dict[str, Any]) -> Path:
     ui_source = (_aksi_root() / "ui" / "index.html").read_text(encoding="utf-8")
     summaries = _read_json(_summary_index_path(repo), {"summaries": {}})
+    marker = "  <script>\n    const svg = d3.select"
     embedded = (
         "  <script>\n"
-        f"    window.__AKSI_ARCHITECTURE__ = {json.dumps(architecture)};\n"
-        f"    window.__AKSI_SUMMARIES__ = {json.dumps(summaries)};\n"
+        f"    window.__AKSI_ARCHITECTURE__ = {_script_json(architecture)};\n"
+        f"    window.__AKSI_SUMMARIES__ = {_script_json(summaries)};\n"
         "  </script>\n"
     )
-    viewer = ui_source.replace("  <script>\n    const svg = d3.select", f"{embedded}  <script>\n    const svg = d3.select", 1)
+    if marker not in ui_source:
+        raise RuntimeError("Could not embed architecture data into ui/index.html")
+    viewer = ui_source.replace(marker, f"{embedded}{marker}", 1)
     output_path = _viewer_path(repo)
     output_path.parent.mkdir(parents=True, exist_ok=True)
     output_path.write_text(viewer, encoding="utf-8")
@@ -97,9 +127,10 @@ def _summary_stale(record: dict[str, Any], file_node: dict[str, Any]) -> bool:
 
 def _read_summary_record(repo: Path, node_id: str) -> dict[str, Any] | None:
     path = _summary_path(repo, node_id)
-    if not path.exists():
+    record = _read_json(path, None)
+    if not isinstance(record, dict):
         return None
-    return json.loads(path.read_text(encoding="utf-8"))
+    return record
 
 
 def _write_summary_index(repo: Path) -> None:
@@ -111,16 +142,29 @@ def _write_summary_index(repo: Path) -> None:
     for path in sorted(context_dir.glob("*.json")):
         if path.name == "index.json":
             continue
-        record = json.loads(path.read_text(encoding="utf-8"))
-        node_id = record.get("node_id")
-        if not node_id or node_id not in nodes:
+        record = _read_json(path, None)
+        if not isinstance(record, dict):
             continue
-        file_node = _file_node_for(nodes[node_id], nodes)
-        record["stale"] = _summary_stale(record, file_node)
+        node_id = record.get("node_id")
+        if not node_id:
+            continue
+        if node_id in nodes:
+            file_node = _file_node_for(nodes[node_id], nodes)
+            record["stale"] = _summary_stale(record, file_node)
+        else:
+            record["stale"] = True
+            record["missing_node"] = True
         records[node_id] = record
 
     _summary_index_path(repo).write_text(
-        json.dumps({"generated_at": _utc_now(), "summaries": records}, indent=2),
+        json.dumps(
+            {
+                "generated_at": _utc_now(),
+                "repo_summary": architecture.get("repo_summary"),
+                "summaries": records,
+            },
+            indent=2,
+        ),
         encoding="utf-8",
     )
 
@@ -145,13 +189,21 @@ def generate_visualization(path: str = ".") -> dict[str, Any]:
     result = scan_repo(str(repo))
     architecture = refresh_stale_flags(load_architecture(repo), repo)
     viewer_file = _write_static_viewer(repo, architecture)
+    viewer_http_url = None
+    viewer_http_error = None
+    try:
+        viewer_http_url = _viewer_http_url(repo)
+    except OSError as error:
+        viewer_http_error = str(error)
     return {
         **result,
         "viewer_file": str(viewer_file),
         "viewer_url": viewer_file.as_uri(),
+        "viewer_http_url": viewer_http_url,
+        "viewer_http_error": viewer_http_error,
         "summary_index_file": str(_summary_index_path(repo)),
         "next_steps": [
-            "Give the user viewer_url so they can open the ready visualization.",
+            "Give the user viewer_http_url when present; otherwise give viewer_url.",
             "Call get_map to inspect the generated graph.",
             "Call get_context for exact source before writing an LLM summary.",
             "Call save_summary to persist the LLM-written explanation for future use.",
@@ -185,7 +237,10 @@ def get_context(node_id: str, path: str = ".") -> dict[str, Any]:
     if file_path:
         source_path = repo / file_path
         if source_path.exists() and source_path.is_file():
-            source = source_path.read_text(encoding="utf-8", errors="replace")
+            try:
+                source = source_path.read_text(encoding="utf-8", errors="replace")
+            except OSError:
+                source = ""
 
     related_edge_ids = [
         edge
@@ -238,8 +293,12 @@ def save_summary(node_id: str, summary: Any, path: str = ".") -> dict[str, Any]:
         "stale": False,
         "written_by": "llm_host",
     }
+    try:
+        payload = json.dumps(record, indent=2)
+    except TypeError as error:
+        return {"error": f"Summary is not JSON serializable: {error}", "node_id": node_id}
     output_path = _summary_path(repo, node_id)
-    output_path.write_text(json.dumps(record, indent=2), encoding="utf-8")
+    output_path.write_text(payload, encoding="utf-8")
     _write_summary_index(repo)
     return {"saved": True, "summary_file": str(output_path), "record": record}
 

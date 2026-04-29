@@ -69,12 +69,13 @@ fi
 python_bin="${venv_dir}/bin/python"
 "${python_bin}" -m pip install "${install_args[@]}"
 
-config_json="$("${python_bin}" - <<PY
+config_json="$(AKSI_PYTHON_BIN="${python_bin}" AKSI_REPO_DIR="${repo_dir}" "${python_bin}" - <<'PY'
 import json
+import os
 from pathlib import Path
 
-python_bin = Path("${python_bin}")
-server = Path("${repo_dir}") / "mcp_server.py"
+python_bin = Path(os.environ["AKSI_PYTHON_BIN"])
+server = Path(os.environ["AKSI_REPO_DIR"]) / "mcp_server.py"
 print(json.dumps({
     "mcpServers": {
         "aksi": {
@@ -98,12 +99,13 @@ fi
 if [[ "${setup_claude}" == "true" ]]; then
   claude_config="${HOME}/Library/Application Support/Claude/claude_desktop_config.json"
   mkdir -p "$(dirname "${claude_config}")"
-  "${python_bin}" - <<PY
+  AKSI_CONFIG_JSON="${config_json}" AKSI_CLAUDE_CONFIG="${claude_config}" "${python_bin}" - <<'PY'
 import json
+import os
 from pathlib import Path
 
-config_path = Path("${claude_config}")
-snippet = json.loads("""${config_json}""")
+config_path = Path(os.environ["AKSI_CLAUDE_CONFIG"])
+snippet = json.loads(os.environ["AKSI_CONFIG_JSON"])
 if config_path.exists():
     config = json.loads(config_path.read_text(encoding="utf-8"))
 else:

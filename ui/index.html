@@ -291,6 +291,12 @@
       return Object.values(graph.nodes || {});
     }
 
+    function assertValidGraph(graph) {
+      if (!graph || typeof graph !== "object" || !graph.nodes || !graph.root || !graph.nodes[graph.root]) {
+        throw new Error("architecture.json is missing a valid root node");
+      }
+    }
+
     function buildHierarchy(graph) {
       const nodes = graph.nodes || {};
       const root = nodes[graph.root];
@@ -519,89 +525,46 @@
       });
     }
 
-    function buildRuntimeFlow() {
-      const items = [
-        {
-          id: "runtime:user-input",
-          type: "input",
-          name: "Repo path or current folder",
-          detail: "User runs Aksi against a local repository.",
-          level: 0,
-        },
-        {
-          id: "runtime:runner",
-          type: "process",
-          name: "aksi.py",
-          detail: "One-command entrypoint scans first, then starts the static UI server.",
-          level: 1,
-        },
-        {
-          id: "runtime:scanner",
-          type: "process",
-          name: "scanner.py",
-          detail: "Walks source files, skips generated folders, hashes files, extracts symbols and imports.",
-          level: 2,
-        },
-        {
-          id: "runtime:cache",
-          type: "artifact",
-          name: "Files/.aksi_cache",
-          detail: "Stores file hashes for changed/stale detection.",
-          level: 3,
-        },
-        {
-          id: "runtime:graph",
-          type: "process",
-          name: "graph.py",
-          detail: "Builds repo/folder/file/symbol nodes and import edges.",
-          level: 3,
-        },
-        {
-          id: "runtime:architecture",
-          type: "artifact",
-          name: "Files/architecture.json",
-          detail: "Generated architecture map consumed by the UI and MCP tools.",
-          level: 4,
-        },
-        {
-          id: "runtime:ui",
-          type: "consumer",
-          name: "ui/index.html",
-          detail: "Loads architecture.json and renders the visual maps in the browser.",
-          level: 5,
-        },
-        {
-          id: "runtime:mcp",
-          type: "consumer",
-          name: "mcp_server.py",
-          detail: "Exposes scan_repo, get_map, and get_context to MCP-capable AI hosts.",
-          level: 5,
-        },
-      ];
-
-      const edges = [
-        ["runtime:user-input", "runtime:runner", "command input"],
-        ["runtime:runner", "runtime:scanner", "scan request"],
-        ["runtime:scanner", "runtime:cache", "hash state"],
-        ["runtime:scanner", "runtime:graph", "files, symbols, imports"],
-        ["runtime:graph", "runtime:architecture", "write map"],
-        ["runtime:architecture", "runtime:ui", "render map"],
-        ["runtime:architecture", "runtime:mcp", "serve context"],
-      ].map(([source, target, label], index) => ({
-        id: `runtime-edge:${index}`,
-        type: "runtime",
-        source,
-        target,
-        import_text: label,
+    function dependencyItems(graph, label) {
+      const nodes = graph.nodes || {};
+      const files = nodeArray(graph).filter(node => node.type === "file");
+      const usedExternalIds = new Set((graph.edges || [])
+        .filter(edge => nodes[edge.target]?.type === "external")
+        .map(edge => edge.target));
+      const externals = Array.from(usedExternalIds).map(id => nodes[id]).filter(Boolean);
+      const items = [...files, ...externals].map(node => ({
+        ...node,
+        children: [],
+        name: node.type === "file" ? node.path : node.name,
+        kindLabel: node.type === "external" ? "external dependency" : label,
+        showKindLabel: true,
       }));
+      const itemIds = new Set(items.map(item => item.id));
+      const edges = (graph.edges || []).filter(edge => itemIds.has(edge.source) && itemIds.has(edge.target));
+      const levelById = new Map(items.map(item => [item.id, 0]));
+
+      for (let pass = 0; pass < items.length; pass += 1) {
+        let changed = false;
+        for (const edge of edges) {
+          const sourceLevel = levelById.get(edge.source) || 0;
+          const targetLevel = levelById.get(edge.target) || 0;
+          if (targetLevel <= sourceLevel) {
+            levelById.set(edge.target, sourceLevel + 1);
+            changed = true;
+          }
+        }
+        if (!changed) break;
+      }
 
       items.forEach(item => {
-        item.children = [];
-        item.kindLabel = typeLabel(item);
-        item.showKindLabel = true;
+        item.level = clamp(levelById.get(item.id) || 0, 0, 8);
         measureNode(item);
       });
       return { items, edges };
+    }
+
+    function buildRuntimeFlow(graph) {
+      return dependencyItems(graph, "runtime module");
     }
 
     function layoutRuntimeItems(items) {
@@ -624,103 +587,7 @@
     }
 
     function buildArchitectureView(graph) {
-      const repo = graph.nodes?.[graph.root]?.name || "Scanned repo";
-      const items = [
-        {
-          id: "architecture:user",
-          type: "input",
-          name: "User / LLM Host",
-          detail: "Starts scans, asks questions, and requests visual context.",
-          why: "Aksi is designed to help humans and AI hosts understand a local codebase without guessing.",
-          how: "The user runs the local CLI or the host calls MCP tools.",
-          role: "External actor that drives visualization and context requests.",
-          level: 0,
-        },
-        {
-          id: "architecture:interfaces",
-          type: "process",
-          name: "Interfaces",
-          detail: "CLI runner and MCP tool surface.",
-          why: "They provide two ways into the same local analysis engine: direct human use and AI-host orchestration.",
-          how: "aksi.py serves the local UI; mcp_server.py exposes FastMCP stdio tools.",
-          role: "Boundary layer for commands and tool calls.",
-          level: 1,
-        },
-        {
-          id: "architecture:analysis",
-          type: "process",
-          name: "Local Analysis Core",
-          detail: "Scanner and graph builder.",
-          why: "This keeps structural truth local and deterministic instead of asking an LLM to infer the repository.",
-          how: "scanner.py extracts files, hashes, symbols, and imports; graph.py builds nodes, edges, stale flags, and unused hints.",
-          role: "Core engine that turns source code into architecture data.",
-          level: 2,
-        },
-        {
-          id: "architecture:repo",
-          type: "artifact",
-          name: repo,
-          detail: "The local repository being scanned.",
-          why: "It is the source of truth for files, symbols, imports, and exact context.",
-          how: "Aksi walks this repository while skipping generated and dependency folders.",
-          role: "Input codebase for all generated maps and summaries.",
-          level: 2,
-        },
-        {
-          id: "architecture:storage",
-          type: "artifact",
-          name: "Generated Files Store",
-          detail: "Files/architecture.json, hash cache, and saved summaries.",
-          why: "The UI and MCP host need a stable local artifact they can read without rescanning every time.",
-          how: "Aksi writes generated JSON and cache data under the scanned repo's Files/ directory.",
-          role: "Local persistence layer for map data and context memory.",
-          level: 3,
-        },
-        {
-          id: "architecture:viewer",
-          type: "consumer",
-          name: "Static D3 Viewer",
-          detail: "Browser UI with Structure, Architecture, and Runtime Flow views.",
-          why: "It makes the generated architecture visible, clickable, and explainable.",
-          how: "ui/index.html loads architecture.json and renders SVG diagrams with D3.",
-          role: "Human-facing visualization layer.",
-          level: 4,
-        },
-        {
-          id: "architecture:context",
-          type: "consumer",
-          name: "MCP Context Memory",
-          detail: "Exact source context plus saved LLM summaries.",
-          why: "Agents can reuse grounded explanations without repeatedly rereading the same code.",
-          how: "get_context returns exact source around a node; save_summary persists the explanation with file hash metadata.",
-          role: "AI-facing explanation and recall layer.",
-          level: 4,
-        },
-      ];
-
-      const edges = [
-        ["architecture:user", "architecture:interfaces", "runs command or calls MCP"],
-        ["architecture:interfaces", "architecture:analysis", "requests local scan"],
-        ["architecture:repo", "architecture:analysis", "source files"],
-        ["architecture:analysis", "architecture:storage", "writes generated map"],
-        ["architecture:storage", "architecture:viewer", "loads map"],
-        ["architecture:storage", "architecture:context", "serves map and summaries"],
-        ["architecture:context", "architecture:user", "grounded explanations"],
-      ].map(([source, target, label], index) => ({
-        id: `architecture-edge:${index}`,
-        type: "architecture",
-        source,
-        target,
-        import_text: label,
-      }));
-
-      items.forEach(item => {
-        item.children = [];
-        item.kindLabel = "system component";
-        item.showKindLabel = true;
-        measureNode(item);
-      });
-      return { items, edges };
+      return dependencyItems(graph, "architecture module");
     }
 
     function layoutArchitectureItems(items) {
@@ -803,21 +670,21 @@
 
     function describeRuntimeNode(node, incoming, outgoing) {
       return {
-        what: node.detail || `${node.type} step in the Aksi runtime flow.`,
-        why: "It explains how user input becomes a generated map and then becomes visible to the UI or MCP host.",
+        what: node.detail || `${node.name} participates in the scanned repository's import/runtime flow.`,
+        why: "It appears here because static imports connect it to other files or external dependencies.",
         how: outgoing.length
-          ? `It receives input, performs its step, then passes output to ${outgoing.length} downstream step${outgoing.length === 1 ? "" : "s"}.`
-          : "It consumes the generated output at the end of the flow.",
-        role: `${typeLabel(node)} with ${incoming.length} incoming and ${outgoing.length} outgoing connection${incoming.length + outgoing.length === 1 ? "" : "s"}.`,
+          ? `It imports or references ${outgoing.length} downstream module${outgoing.length === 1 ? "" : "s"} in the scanned repo graph.`
+          : "No downstream imports are visible from this node in the generated graph.",
+        role: `Runtime-flow node with ${incoming.length} incoming and ${outgoing.length} outgoing connection${incoming.length + outgoing.length === 1 ? "" : "s"}.`,
       };
     }
 
     function describeArchitectureNode(node, incoming, outgoing) {
       return {
-        what: node.detail || `${node.name} is part of the Aksi system architecture.`,
-        why: node.why || "It is a real component in the local visualization and MCP workflow.",
-        how: node.how || "It exchanges generated artifacts or tool calls with neighboring architecture components.",
-        role: node.role || `System component with ${incoming.length} incoming and ${outgoing.length} outgoing connection${incoming.length + outgoing.length === 1 ? "" : "s"}.`,
+        what: node.detail || `${node.name} is a module in the scanned repository architecture.`,
+        why: node.why || "It appears in the architecture view because it is a local source file or dependency endpoint.",
+        how: node.how || "Aksi places it from static import relationships discovered in the scanned repository.",
+        role: node.role || `Repository module with ${incoming.length} incoming and ${outgoing.length} outgoing dependency connection${incoming.length + outgoing.length === 1 ? "" : "s"}.`,
       };
     }
 
@@ -844,6 +711,15 @@
       }
       if (currentView === "architecture") {
         return { ...describeArchitectureNode(node, incoming, outgoing), source: "Local architecture summary" };
+      }
+      if (node.type === "repo" && currentGraph?.repo_summary) {
+        return {
+          what: currentGraph.repo_summary,
+          why: "This gives a quick repo-level orientation before inspecting individual files and symbols.",
+          how: "Aksi generated it from local scan counts, detected languages, symbols, and imports.",
+          role: "Top-level overview for the scanned repository.",
+          source: "Local repo summary",
+        };
       }
       return currentView === "runtime"
         ? { ...describeRuntimeNode(node, incoming, outgoing), source: "Local fallback summary" }
@@ -920,7 +796,7 @@
         source: edge.source.data.id,
         target: edge.target.data.id,
       }));
-      currentDiagramEdges = hierarchyEdges;
+      currentDiagramEdges = [...hierarchyEdges, ...visibleImports];
 
       hierarchyEdgeLayer.selectAll("path")
         .data(root.links(), edge => `${edge.source.data.id}->${edge.target.data.id}`)
@@ -1064,11 +940,11 @@
       svg.call(zoomBehavior);
       svg.call(zoomBehavior.transform, fitTransform(bounds));
 
-      meta.textContent = `${items.length} system components · ${edges.length} architecture relationships · local-first analysis`;
+      meta.textContent = `${items.length} architecture modules · ${edges.length} dependency relationships · local-first analysis`;
     }
 
     function renderRuntimeFlow(graph) {
-      const { items, edges } = buildRuntimeFlow();
+      const { items, edges } = buildRuntimeFlow(graph);
       layoutRuntimeItems(items);
 
       const bounds = graphBounds(items.map(data => ({ data })));
@@ -1138,7 +1014,7 @@
       svg.call(zoomBehavior);
       svg.call(zoomBehavior.transform, fitTransform(bounds));
 
-      meta.textContent = `${items.length} runtime steps · ${edges.length} process edges`;
+      meta.textContent = `${items.length} runtime modules · ${edges.length} import-flow edges`;
     }
 
     function render(graph) {
@@ -1209,7 +1085,8 @@
     });
 
     function boot(graph, summaries = {}) {
-      summaryIndex = summaries.summaries || {};
+      assertValidGraph(graph);
+      summaryIndex = summaries?.summaries || {};
       currentGraph = graph;
       render(graph);
     }
@@ -1237,7 +1114,8 @@
         })
         .catch(error => {
           meta.textContent = "Could not load ../Files/architecture.json";
-          details.innerHTML = `<h2>Map unavailable</h2><p>${error.message}</p>`;
+          details.classList.add("open");
+          details.innerHTML = `<h2>Map unavailable</h2><p>${escapeHtml(error.message)}</p>`;
         });
     }
 

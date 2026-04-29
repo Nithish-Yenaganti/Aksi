@@ -54,3 +54,27 @@ def test_graph_marks_possibly_unused_files_and_symbols(tmp_path: Path) -> None:
         node["type"] == "function" and node["name"] == "helper" and node["unused"] is False
         for node in nodes.values()
     )
+
+
+def test_graph_resolves_typescript_extensionless_and_js_imports(tmp_path: Path) -> None:
+    (tmp_path / "promptServer.ts").write_text(
+        "import { openDb } from './memory/db.js';\n"
+        "import { recordFeedback } from './tools/recordFeedback';\n"
+        "export function start() { return openDb() && recordFeedback(); }\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "memory").mkdir()
+    (tmp_path / "memory" / "db.ts").write_text("export function openDb() { return true; }\n", encoding="utf-8")
+    (tmp_path / "tools").mkdir()
+    (tmp_path / "tools" / "recordFeedback.ts").write_text(
+        "export function recordFeedback() { return true; }\n",
+        encoding="utf-8",
+    )
+
+    architecture = build_architecture(scan_repo(tmp_path))
+    nodes = architecture["nodes"]
+
+    assert any(edge["target"] == file_id("memory/db.ts") for edge in architecture["edges"])
+    assert any(edge["target"] == file_id("tools/recordFeedback.ts") for edge in architecture["edges"])
+    assert nodes[file_id("memory/db.ts")]["unused"] is False
+    assert nodes[file_id("tools/recordFeedback.ts")]["unused"] is False

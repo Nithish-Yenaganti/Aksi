@@ -4,10 +4,12 @@ from __future__ import annotations
 
 import argparse
 import json
+import posixpath
 import re
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
+from urllib.parse import quote
 
 from scanner import FILES_DIR_NAME, ScanResult, hash_file, scan_repo
 
@@ -20,15 +22,19 @@ ENTRYPOINT_FILENAMES = {
     "cli.py",
     "index.js",
     "index.ts",
+    "index.tsx",
     "main.py",
+    "main.ts",
+    "main.tsx",
     "mcp_server.py",
     "server.py",
+    "server.ts",
+    "server.tsx",
 }
 
 
 def slug(value: str) -> str:
-    safe = re.sub(r"[^A-Za-z0-9_.:/-]+", "-", value.strip())
-    return safe.strip("-") or "root"
+    return quote(value.strip(), safe="ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_.:/-") or "root"
 
 
 def folder_id(path: str) -> str:
@@ -68,29 +74,50 @@ def ensure_folder(nodes: dict[str, dict[str, Any]], parent_id: str, folder_path:
 
 def candidate_paths_for_import(module: str, importer_path: str, all_paths: set[str]) -> list[str]:
     candidates: list[str] = []
-    importer_dir = Path(importer_path).parent
+    importer_dir = Path(importer_path).parent.as_posix()
+    if importer_dir == ".":
+        importer_dir = ""
     normalized = module.strip()
 
-    if normalized.startswith("."):
-        base = importer_dir
-        while normalized.startswith("."):
-            normalized = normalized[1:]
+    if normalized.startswith(("./", "../")):
+        candidates.append(posixpath.normpath(posixpath.join(importer_dir, normalized)))
+    elif normalized.startswith("."):
+        dot_count = len(normalized) - len(normalized.lstrip("."))
+        remainder = normalized[dot_count:]
+        base = Path(importer_dir or ".")
+        for _ in range(max(0, dot_count - 1)):
             if base != Path("."):
                 base = base.parent
-        if normalized:
-            candidates.append((base / normalized.replace(".", "/")).as_posix())
-    elif normalized.startswith(("./", "../")):
-        candidates.append((importer_dir / normalized).as_posix())
+        if remainder:
+            candidates.append((base / remainder.replace(".", "/")).as_posix())
+        else:
+            candidates.append(base.as_posix())
     else:
         candidates.append(normalized.replace(".", "/"))
         candidates.append(normalized)
 
-    suffixes = ["", ".py", ".js", ".jsx", ".ts", ".tsx", "/index.js", "/index.ts", "/__init__.py"]
+    suffixes = [
+        "",
+        ".py",
+        ".js",
+        ".jsx",
+        ".ts",
+        ".tsx",
+        "/index.js",
+        "/index.jsx",
+        "/index.ts",
+        "/index.tsx",
+        "/__init__.py",
+    ]
     expanded: list[str] = []
     for candidate in candidates:
-        candidate = str(Path(candidate)).replace("\\", "/")
+        candidate = posixpath.normpath(str(candidate).replace("\\", "/"))
         for suffix in suffixes:
             expanded.append(f"{candidate}{suffix}")
+        if candidate.endswith(".js"):
+            expanded.extend([f"{candidate[:-3]}.ts", f"{candidate[:-3]}.tsx"])
+        if candidate.endswith(".jsx"):
+            expanded.append(f"{candidate[:-4]}.tsx")
 
     return [item for item in expanded if item in all_paths]
 
@@ -155,14 +182,19 @@ def annotate_usage(
     architecture: dict[str, Any],
     result: ScanResult,
     local_import_targets: list[str],
+    local_import_sources: list[str],
 ) -> None:
     nodes = architecture["nodes"]
     source_texts = read_source_texts(result)
     incoming_by_file = {item.path: 0 for item in result.files}
+    outgoing_by_file = {item.path: 0 for item in result.files}
 
     for target_path in local_import_targets:
         if target_path in incoming_by_file:
             incoming_by_file[target_path] += 1
+    for source_path in local_import_sources:
+        if source_path in outgoing_by_file:
+            outgoing_by_file[source_path] += 1
 
     unused_files = 0
     unused_symbols = 0
@@ -172,8 +204,10 @@ def annotate_usage(
             continue
         path = node.get("path", "")
         incoming_count = incoming_by_file.get(path, 0)
+        outgoing_count = outgoing_by_file.get(path, 0)
         node["usage_count"] = incoming_count
-        if incoming_count == 0 and not is_probable_entrypoint(path):
+        node["outgoing_usage_count"] = outgoing_count
+        if incoming_count == 0 and outgoing_count == 0 and not is_probable_entrypoint(path):
             node["unused"] = True
             node["dead_reason"] = "No local files import this file; it may be unused or externally invoked."
             unused_files += 1
@@ -199,6 +233,19 @@ def annotate_usage(
     }
 
 
+def repo_summary(result: ScanResult) -> str:
+    languages: dict[str, int] = {}
+    for item in result.files:
+        languages[item.language] = languages.get(item.language, 0) + 1
+    language_text = ", ".join(f"{count} {language}" for language, count in sorted(languages.items()))
+    symbol_count = sum(len(item.symbols) for item in result.files)
+    import_count = sum(len(item.imports) for item in result.files)
+    return (
+        f"This repository contains {len(result.files)} scanned source files"
+        f" ({language_text or 'no detected languages'}), {symbol_count} symbols, and {import_count} import references."
+    )
+
+
 def build_architecture(result: ScanResult) -> dict[str, Any]:
     root_id = "repo:."
     root_path = Path(result.repo_path)
@@ -208,6 +255,7 @@ def build_architecture(result: ScanResult) -> dict[str, Any]:
     edges: list[dict[str, Any]] = []
     all_paths = {item.path for item in result.files}
     local_import_targets: list[str] = []
+    local_import_sources: list[str] = []
 
     for scanned_file in result.files:
         parent_id = root_id
@@ -252,6 +300,7 @@ def build_architecture(result: ScanResult) -> dict[str, Any]:
             else:
                 target = file_id(target_path)
                 local_import_targets.append(target_path)
+                local_import_sources.append(scanned_file.path)
             edges.append(
                 {
                     "id": f"edge:{slug(scanned_file.path)}:{index}:{slug(import_ref.module)}",
@@ -269,8 +318,9 @@ def build_architecture(result: ScanResult) -> dict[str, Any]:
         "edges": edges,
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "scanner": result.scanner,
+        "repo_summary": repo_summary(result),
     }
-    annotate_usage(architecture, result, local_import_targets)
+    annotate_usage(architecture, result, local_import_targets, local_import_sources)
     return architecture
 
 
@@ -282,7 +332,7 @@ def write_architecture(repo_path: str | Path = ".") -> dict[str, Any]:
     result = scan_repo(repo_path)
     architecture = build_architecture(result)
     output_path = architecture_path(repo_path)
-    output_path.parent.mkdir(exist_ok=True)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
     output_path.write_text(json.dumps(architecture, indent=2), encoding="utf-8")
     return architecture
 
@@ -291,7 +341,10 @@ def load_architecture(repo_path: str | Path = ".") -> dict[str, Any]:
     path = architecture_path(repo_path)
     if not path.exists():
         return write_architecture(repo_path)
-    return json.loads(path.read_text(encoding="utf-8"))
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return write_architecture(repo_path)
 
 
 def refresh_stale_flags(architecture: dict[str, Any], repo_path: str | Path = ".") -> dict[str, Any]:
@@ -306,7 +359,10 @@ def refresh_stale_flags(architecture: dict[str, Any], repo_path: str | Path = ".
         if not relpath or not saved_hash:
             continue
         current_path = root / relpath
-        stale_by_path[relpath] = not current_path.exists() or hash_file(current_path) != saved_hash
+        try:
+            stale_by_path[relpath] = not current_path.exists() or hash_file(current_path) != saved_hash
+        except OSError:
+            stale_by_path[relpath] = True
 
     for node in nodes.values():
         relpath = node.get("path")
