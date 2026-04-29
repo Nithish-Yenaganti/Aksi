@@ -1,54 +1,67 @@
 # Aksi Agent Instructions
 
-## Mission
+## Purpose
 
-Aksi is a local, private codebase visualizer for coding agents and humans.
+Aksi turns a local codebase into a generated visual map for coding agents and humans.
 
-Agents must keep structural analysis local. Do not use an LLM to guess files, symbols, imports, dependencies, stale state, or unused-code markers. Use Aksi tools.
+The scanner and graph builder are local source-of-truth systems. Do not use an LLM to guess files, symbols, imports, dependencies, stale state, unused-code hints, or architecture candidates.
 
-## If User Asks For Visualization
+## Expected Agent Flow
 
-When connected through MCP and the user asks to visualize, refresh, inspect, or explain a project:
+When a user asks to visualize, refresh, inspect, or explain a project through MCP:
 
-1. Call `generate_visualization(path)` for the target repo.
-   - If the user explicitly wants Aksi to generate architecture summaries directly, call `generate_visualization(path, summarize=True)`.
-   - Direct LLM summaries require an explicit opt-in and provider configuration such as `OPENAI_API_KEY`.
-2. Give the user `viewer_http_url` when present. If localhost startup is unavailable, give `viewer_url`.
-3. Call `get_map(path)` if you need map counts, node IDs, edges, stale files, or unused markers.
-4. Call `get_context(node_id, path)` before explaining any specific rectangle.
-5. Write the explanation from the exact returned source/context.
-6. Call `save_summary(node_id, summary, path)` when the user wants that explanation available in the UI later.
-
-If `summarize=True` is used, Aksi will call the configured LLM only for repo and architecture-component summaries. Scanning, graph building, stale detection, unused-code hints, and UI generation remain local.
+1. Call `generate_visualization(path)` for the target repository.
+2. Give the user `viewer_http_url` when it exists; otherwise give `viewer_url`.
+3. Use `get_map(path)` when you need node IDs, counts, edges, stale files, unused markers, or architecture components.
+4. Use `get_context(node_id, path)` before explaining any specific rectangle.
+5. Use `save_summary(node_id, summary, path)` when an explanation should appear in the viewer later.
 
 Do not ask the user to run `aksi.py` manually when MCP tools are available.
 
+## Summary Flow
+
+`generate_visualization` scans first, then writes summaries.
+
+Default behavior:
+
+```text
+scan repo locally
+build graph locally
+detect architecture components locally
+optionally call configured LLM for repo/component summaries
+save summaries in Files/context/
+write Files/index.html
+return viewer URL
+```
+
+The LLM may only write natural-language summaries after Aksi has produced local context. The LLM must not decide source structure.
+
+If no LLM provider or API key is configured, Aksi still generates the graph and viewer. Summary failures are returned in `llm_summary.errors`.
+
 ## Generated Output
 
-Aksi writes generated files into the scanned repo:
+Aksi writes generated files into the scanned repository:
 
 - `Files/architecture.json`
 - `Files/index.html`
 - `Files/.aksi_cache*`
 - `Files/context/*.json`
 
-`Files/index.html` is the ready viewer for that scanned repo. It embeds the generated map. `generate_visualization` tries to start a local static server and returns `viewer_http_url`; if that is unavailable, use the returned `viewer_url`.
-
 Do not commit `Files/`.
 
-## Core Files
+## Main Files
 
-- `scanner.py`: local scanner for files, hashes, symbols, and imports.
-- `graph.py`: builds `Files/architecture.json`, dependency edges, stale flags, and unused-code hints.
-- `mcp_server.py`: FastMCP stdio tools for agents.
-- `aksi.py`: direct local runner for manual scan and UI serving.
-- `ui/index.html`: source template for the generated viewer.
-- `tests/`: scanner, graph, and MCP tests.
+- `scanner.py`: walks the repo, hashes files, extracts symbols, and extracts imports.
+- `graph.py`: builds `architecture.json`, tree nodes, dependency edges, stale flags, unused-code hints, and architecture components.
+- `llm_summary.py`: optional LLM summary provider used only after scanning.
+- `mcp_server.py`: FastMCP stdio server and agent-facing tools.
+- `aksi.py`: one-command local runner that generates and serves `Files/index.html`.
+- `ui/index.html`: static viewer template copied into generated output.
+- `tests/`: coverage for scanner, graph, MCP behavior, and summary persistence.
 
 ## MCP Tools
 
-- `generate_visualization(path=".")`
-- `generate_visualization(path=".", summarize=True, llm_provider="openai", llm_model=None)`
+- `generate_visualization(path=".", summarize=True, llm_provider=None, llm_model=None, serve_viewer=True)`
 - `scan_repo(path=".")`
 - `get_map(path=".")`
 - `get_context(node_id, path=".")`
@@ -56,21 +69,31 @@ Do not commit `Files/`.
 - `get_summary(node_id, path=".")`
 - `list_summaries(path=".")`
 
+## CLI
+
+```bash
+python aksi.py
+python aksi.py --no-summarize
+python aksi.py --scan-only
+python aksi.py --test
+```
+
+`python aksi.py` writes `Files/index.html` and serves that generated viewer.
+
 ## Rules
 
 - Do not read old git history unless the user explicitly asks.
-- Do not add external LLM calls to scanning, graph building, stale detection, unused-code detection, or UI generation.
-- Optional direct LLM calls are allowed only for explicit `summarize=True` architecture summaries.
+- Keep scanning, graph building, stale detection, unused-code detection, and architecture candidate detection local.
 - Keep the MCP server stdio-based.
 - Keep the viewer static.
 - Prefer Tree-sitter or structured parsing; regex fallbacks are only for resilience.
-- Keep public commands and MCP tool names stable unless the user asks for a breaking change.
+- Keep public command and MCP tool names stable unless the user asks for a breaking change.
 
 ## Validation
 
 Before finishing implementation work, run:
 
 ```bash
-.venv/bin/python -m py_compile scanner.py graph.py mcp_server.py aksi.py
+.venv/bin/python -m py_compile scanner.py graph.py mcp_server.py aksi.py llm_summary.py
 .venv/bin/python -m pytest
 ```

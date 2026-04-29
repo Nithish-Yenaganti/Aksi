@@ -86,7 +86,7 @@ scripts/setup_mcp.sh --claude-desktop
 
 Available tools:
 
-- `generate_visualization(path: str = ".", summarize: bool = False, llm_provider: str | None = None, llm_model: str | None = None)`
+- `generate_visualization(path: str = ".", summarize: bool = True, llm_provider: str | None = None, llm_model: str | None = None, serve_viewer: bool = True)`
 - `scan_repo(path: str = ".")`
 - `get_map(path: str = ".")`
 - `get_context(node_id: str, path: str = ".")`
@@ -111,19 +111,19 @@ Normal MCP workflow:
 5. The host writes the summary and calls `save_summary`.
 6. Aksi stores summaries under `Files/context/` with file hashes, so `get_summary` can report stale summaries after source changes.
 
-Optional direct LLM summaries:
+Direct LLM summaries run after scanning by default:
 
 ```bash
-OPENAI_API_KEY=... python aksi.py --summarize
+OPENAI_API_KEY=... python aksi.py
 ```
 
 Or through MCP:
 
 ```text
-generate_visualization(path=".", summarize=True, llm_provider="openai")
+generate_visualization(path=".", llm_provider="openai")
 ```
 
-With `summarize=True`, Aksi still scans, builds the graph, detects stale files, marks unused-code hints, and writes the UI locally. The configured LLM is used only to write repo and architecture-component summaries, which Aksi stores under `Files/context/`. For tests or dry runs, use `llm_provider="mock"`.
+Aksi still scans, builds the graph, detects stale files, marks unused-code hints, and writes the UI locally. The configured LLM is used only after scanning to write repo and architecture-component summaries, which Aksi stores under `Files/context/`. For tests or dry runs, use `llm_provider="mock"`. To skip summaries for a local run, use `python aksi.py --no-summarize`.
 
 ## View the Map
 
@@ -136,16 +136,16 @@ python aksi.py
 For manual static serving after a scan, serve the repository directory and open the UI:
 
 ```bash
-python -m http.server 8000
+python -m http.server 8000 --directory Files
 ```
 
 Then open:
 
 ```text
-http://localhost:8000/ui/
+http://localhost:8000/index.html
 ```
 
-The source viewer loads `../Files/architecture.json`. The MCP-generated `Files/index.html` embeds the generated map directly, and `generate_visualization` returns the best available viewer URL.
+The source viewer template lives at `ui/index.html`. The generated viewer lives at `Files/index.html`, embeds the generated map directly, and is the file users should open.
 
 ## Development
 

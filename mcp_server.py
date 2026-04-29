@@ -342,9 +342,10 @@ def scan_repo(path: str = ".") -> dict[str, Any]:
 @mcp.tool
 def generate_visualization(
     path: str = ".",
-    summarize: bool = False,
+    summarize: bool = True,
     llm_provider: str | None = None,
     llm_model: str | None = None,
+    serve_viewer: bool = True,
 ) -> dict[str, Any]:
     """Generate the architecture map for UI/MCP use without requiring users to run aksi.py."""
     repo = _repo(path)
@@ -357,10 +358,11 @@ def generate_visualization(
     viewer_file = _write_static_viewer(repo, architecture)
     viewer_http_url = None
     viewer_http_error = None
-    try:
-        viewer_http_url = _viewer_http_url(repo)
-    except OSError as error:
-        viewer_http_error = str(error)
+    if serve_viewer:
+        try:
+            viewer_http_url = _viewer_http_url(repo)
+        except OSError as error:
+            viewer_http_error = str(error)
     return {
         **result,
         "viewer_file": str(viewer_file),
@@ -372,7 +374,7 @@ def generate_visualization(
         "next_steps": [
             "Give the user viewer_http_url when present; otherwise give viewer_url.",
             "Call get_map to inspect the generated graph.",
-            "If summarize=True was not used, call get_context before writing an LLM summary.",
+            "If LLM summaries failed or need refinement, call get_context before writing a replacement summary.",
             "Call save_summary to persist any host-written explanation for future use.",
         ],
     }

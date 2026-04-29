@@ -17,6 +17,7 @@ def test_mcp_helpers_return_expected_shapes(tmp_path: Path) -> None:
     assert scan_summary["viewer_url"].startswith("file://")
     assert "viewer_http_url" in scan_summary
     assert "viewer_http_error" in scan_summary
+    assert scan_summary["llm_summary"]["requested"] is True
     assert Path(scan_summary["viewer_file"]).exists()
     assert "__AKSI_ARCHITECTURE__" in Path(scan_summary["viewer_file"]).read_text(encoding="utf-8")
     assert scan_summary["summary_index_file"].endswith("Files/context/index.json")
@@ -121,11 +122,11 @@ def test_mcp_returns_context_for_architecture_components(tmp_path: Path) -> None
     assert listed["summaries"][component["id"]]["summary"] == "This component exposes the MCP entrypoint."
 
 
-def test_generate_visualization_can_opt_into_mock_llm_summaries(tmp_path: Path) -> None:
+def test_generate_visualization_uses_mock_llm_summaries(tmp_path: Path) -> None:
     (tmp_path / "mcp_server.py").write_text("def serve():\n    return True\n", encoding="utf-8")
     (tmp_path / "graph.py").write_text("def build():\n    return 1\n", encoding="utf-8")
 
-    result = mcp_server.generate_visualization(str(tmp_path), summarize=True, llm_provider="mock")
+    result = mcp_server.generate_visualization(str(tmp_path), llm_provider="mock")
     listed = mcp_server.list_summaries(str(tmp_path))
     graph = mcp_server.get_map(str(tmp_path))
     component_ids = {component["id"] for component in graph["components"]}
