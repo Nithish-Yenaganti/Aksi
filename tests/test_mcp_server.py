@@ -133,6 +133,23 @@ def test_generate_visualization_preserves_saved_summaries_during_refresh(tmp_pat
     assert all(listed["summaries"][node_id]["stale"] is False for node_id in target_ids)
 
 
+def test_generate_visualization_scans_once(tmp_path: Path, monkeypatch) -> None:
+    (tmp_path / "app.py").write_text("def run():\n    return 1\n", encoding="utf-8")
+    original_write_architecture = mcp_server.write_architecture
+    calls = 0
+
+    def counted_write_architecture(path):
+        nonlocal calls
+        calls += 1
+        return original_write_architecture(path)
+
+    monkeypatch.setattr(mcp_server, "write_architecture", counted_write_architecture)
+
+    mcp_server.generate_visualization(str(tmp_path))
+
+    assert calls == 1
+
+
 def test_mcp_returns_context_for_architecture_components(tmp_path: Path) -> None:
     (tmp_path / "mcp_server.py").write_text("from graph import build\n\ndef serve():\n    return build()\n", encoding="utf-8")
     (tmp_path / "graph.py").write_text("def build():\n    return 1\n", encoding="utf-8")

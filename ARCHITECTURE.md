@@ -111,8 +111,8 @@ It loads:
 It currently renders three views:
 
 - `Structure`: full repo tree with folders, files, and symbols
-- `Architecture`: file/module dependency diagram
-- `Runtime Flow`: how Aksi turns input into map, UI, and MCP context
+- `Architecture`: local component candidates grouped from files, symbols, names, and dependency relationships
+- `Runtime Flow`: static import/dependency-flow projection between local files and external dependency endpoints
 
 Clicking a rectangle opens a detail card with:
 
@@ -160,8 +160,10 @@ Current test areas:
 4. The graph builder creates nodes, edges, stale flags, and unused-code hints.
 5. Aksi writes Files/architecture.json.
 6. The UI reads architecture.json and renders visual diagrams.
-7. The MCP server lets an LLM host fetch exact context for selected nodes.
-8. The LLM host can save summaries back into Files/context/.
+7. The MCP server returns summary targets for rectangles that are missing or stale.
+8. The LLM host fetches exact context for those targets with `get_context`.
+9. The LLM host saves summaries back into `Files/context/`.
+10. Aksi updates `Files/context/index.json` and regenerates `Files/index.html`.
 ```
 
 ## Generated JSON Shape
@@ -214,25 +216,25 @@ User asks host to visualize or explain a repo
 Host calls generate_visualization(path)
       |
       v
-Aksi scans locally and writes architecture.json
+Aksi scans locally, preserves summaries, writes architecture.json and index.html
       |
       v
-Host calls get_map(path)
+Host opens viewer URL and reads summary_targets
       |
       v
-User clicks or asks about a rectangle
+Host calls get_context for targets where needs_summary is true
       |
       v
-Host calls get_context(node_id, path)
-      |
-      v
-Host summarizes exact code context
+Host writes grounded summaries
       |
       v
 Host calls save_summary(node_id, summary, path)
+      |
+      v
+User clicks rectangles and sees saved summaries
 ```
 
-This keeps heavy structural analysis local. The LLM is mainly used for orchestration and explanation.
+This keeps structural analysis local. The LLM host is used only for orchestration and grounded natural-language explanations.
 
 ## Design Principles
 
@@ -243,4 +245,3 @@ This keeps heavy structural analysis local. The LLM is mainly used for orchestra
 - Tree-sitter or structured parsing is preferred over loose text parsing
 - LLM summaries must be grounded in exact source context from MCP tools
 - Public commands and MCP tool names should remain stable
-

@@ -12,11 +12,13 @@ When a user asks to visualize, refresh, inspect, or explain a project through MC
 
 1. Call `generate_visualization(path)` for the target repository.
 2. Give the user `viewer_http_url` when it exists; otherwise give `viewer_url`.
-3. Use `get_map(path)` when you need node IDs, counts, edges, stale files, unused markers, or architecture components.
-4. Use `get_context(node_id, path)` before explaining any specific rectangle.
-5. Use `save_summary(node_id, summary, path)` when an explanation should appear in the viewer later.
+3. Read `summary_targets` from the response.
+4. For every target where `needs_summary` is `true`, call `get_context(node_id, path)`.
+5. Write the summary from that exact context and call `save_summary(node_id, summary, path)`.
+6. Use `get_map(path)` only when you need extra node IDs, counts, edges, stale files, unused markers, or architecture components.
+7. Use `get_context(node_id, path)` before explaining any specific rectangle.
 
-Do not ask the user to run `aksi.py` manually when MCP tools are available.
+Do not ask the user to run `aksi.py` manually when MCP tools are available. `aksi.py` is only for direct local use outside an MCP host.
 
 ## Summary Flow
 
@@ -28,12 +30,13 @@ Default behavior:
 scan repo locally
 build graph locally
 detect architecture components locally
+preserve old summaries and mark stale ones
+write Files/index.html with the current map and available summaries
 return summary targets grouped by structure, architecture, and runtime
 host LLM calls get_context for each target where needs_summary is true
 host LLM writes summaries
 host calls save_summary
-write Files/index.html
-return viewer URL
+save_summary updates Files/context/index.json and regenerates Files/index.html
 ```
 
 The LLM may only write natural-language summaries after Aksi has produced local context. The LLM must not decide source structure, architecture candidates, or runtime-flow candidates.

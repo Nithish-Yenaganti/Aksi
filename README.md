@@ -110,9 +110,10 @@ Normal MCP workflow:
 4. The response includes `summary_targets` grouped by `structure`, `architecture`, and `runtime`.
 5. For each target where `needs_summary` is `true`, the host calls `get_context` and uses its own LLM to write the summary.
 6. The host calls `save_summary` for each written explanation so the viewer can show it when that rectangle is clicked.
-7. Aksi stores summaries under `Files/context/` with file hashes, so `get_summary` can report stale summaries after source changes.
+7. Aksi stores summaries under `Files/context/`, updates `Files/context/index.json`, and regenerates `Files/index.html`.
+8. On the next run, Aksi preserves fresh summaries, marks changed context as stale, and returns only stale or missing targets as needing work.
 
-Aksi never calls an external LLM directly. It scans, builds the graph, detects stale files, marks unused-code hints, returns summary targets, and writes the UI locally. The connected host LLM owns the language-writing step. To skip summary targets for a local run, use `python aksi.py --no-summarize`.
+Aksi never calls an external LLM directly. It scans, builds the graph, detects stale files, marks unused-code hints, returns summary targets, preserves saved summaries, and writes the UI locally. The connected host LLM owns the language-writing step. To skip summary targets for a local run, use `python aksi.py --no-summarize`.
 
 On the first run, the host should summarize every target where `needs_summary` is `true`. On later runs, the host should only summarize targets marked `missing` or `stale`; targets marked `fresh` can be skipped.
 

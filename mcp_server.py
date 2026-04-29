@@ -489,17 +489,26 @@ def _empty_summary_targets() -> dict[str, list[dict[str, Any]]]:
     return {"structure": [], "architecture": [], "runtime": []}
 
 
-@mcp.tool
-def scan_repo(path: str = ".") -> dict[str, Any]:
-    """Scan a repository and write Files/architecture.json."""
-    repo = _repo(path)
+def _scan_repository(
+    repo: Path,
+    preserved_summary_records: dict[str, Any] | None = None,
+) -> tuple[dict[str, Any], dict[str, Any]]:
     architecture = write_architecture(repo)
-    _write_summary_index(repo)
-    return {
+    _write_summary_index(repo, preserved_summary_records)
+    result = {
         "path": str(repo),
         "summary": summarize_architecture(architecture),
         "architecture_file": str(repo / "Files" / "architecture.json"),
     }
+    return result, architecture
+
+
+@mcp.tool
+def scan_repo(path: str = ".") -> dict[str, Any]:
+    """Scan a repository and write Files/architecture.json."""
+    repo = _repo(path)
+    result, _architecture = _scan_repository(repo)
+    return result
 
 
 @mcp.tool
@@ -511,9 +520,8 @@ def generate_visualization(
     """Generate the architecture map for UI/MCP use without requiring users to run aksi.py."""
     repo = _repo(path)
     preserved_summary_records = _summary_records_from_disk(repo)
-    result = scan_repo(str(repo))
-    _write_summary_index(repo, preserved_summary_records)
-    architecture = refresh_stale_flags(load_architecture(repo), repo)
+    result, architecture = _scan_repository(repo, preserved_summary_records)
+    architecture = refresh_stale_flags(architecture, repo)
     summary_targets = _summary_targets(repo, architecture) if summarize else _empty_summary_targets()
     viewer_file = _write_static_viewer(repo, architecture)
     viewer_http_url = None
