@@ -53,6 +53,10 @@ def external_id(module: str) -> str:
     return f"external:{slug(module)}"
 
 
+def component_id(name: str) -> str:
+    return f"component:{slug(name.lower().replace(' ', '-'))}"
+
+
 def make_node(node_id: str, node_type: str, name: str, path: str, **extra: Any) -> dict[str, Any]:
     node = {"id": node_id, "type": node_type, "name": name, "path": path, "children": []}
     node.update({key: value for key, value in extra.items() if value is not None})
@@ -246,6 +250,175 @@ def repo_summary(result: ScanResult) -> str:
     )
 
 
+COMPONENT_DEFINITIONS: dict[str, dict[str, str]] = {
+    "interface": {
+        "name": "Agent and MCP Interface",
+        "detail": "Entry points that expose the project to coding agents, clients, or local commands.",
+        "why": "This layer is where outside requests enter the project before being routed into internal code.",
+        "how": "Aksi groups files with MCP, server, API, route, app, or entrypoint naming into this component.",
+        "role": "Receives user or host calls and coordinates the next local operation.",
+    },
+    "prompt": {
+        "name": "Prompt Pipeline",
+        "detail": "Code that prepares, transforms, or serves prompt-oriented workflows.",
+        "why": "Prompt pipelines are the core behavior in agent-facing projects because they decide how user input becomes structured work.",
+        "how": "Aksi groups files whose path or symbols mention prompt processing into this component.",
+        "role": "Turns incoming intent into host-ready data or actions.",
+    },
+    "memory": {
+        "name": "Context and Memory",
+        "detail": "Persistence, embeddings, retrieval, feedback, and saved context utilities.",
+        "why": "This layer lets the project remember useful explanations and retrieve prior knowledge instead of recomputing everything.",
+        "how": "Aksi groups files with memory, database, embedding, few-shot, feedback, context, or summary naming into this component.",
+        "role": "Stores and retrieves durable context for future runs.",
+    },
+    "scanner": {
+        "name": "Source Scanner",
+        "detail": "Static analysis code that reads local files and extracts hashes, symbols, and imports.",
+        "why": "The scanner keeps structural discovery local and deterministic, so the LLM host does not guess repo shape.",
+        "how": "Aksi groups parser, scanner, tree-sitter, and extraction modules into this component.",
+        "role": "Converts source files into a flat inventory of facts.",
+    },
+    "graph": {
+        "name": "Architecture Graph Builder",
+        "detail": "Code that converts scanned facts into maps, dependency edges, stale flags, and usage hints.",
+        "why": "This layer turns raw scan data into the visual and machine-readable blueprint.",
+        "how": "Aksi groups graph, architecture, dependency, and visualization-builder modules into this component.",
+        "role": "Builds the repository model consumed by MCP tools and the viewer.",
+    },
+    "viewer": {
+        "name": "Static Viewer",
+        "detail": "Browser UI code for rendering structure, runtime flow, architecture, details, and saved summaries.",
+        "why": "The viewer makes the local analysis inspectable by humans without requiring a hosted backend.",
+        "how": "Aksi groups UI, HTML, rendering, and view modules into this component.",
+        "role": "Displays generated maps and summary panels from static JSON data.",
+    },
+    "scripts": {
+        "name": "CLI and Scripts",
+        "detail": "Command-line helpers, setup scripts, and standalone local runners.",
+        "why": "These files make the project installable, testable, and runnable outside an MCP client.",
+        "how": "Aksi groups scripts, setup files, CLIs, and local runner files into this component.",
+        "role": "Provides manual and automation entry points for developers.",
+    },
+    "tests": {
+        "name": "Validation Suite",
+        "detail": "Tests and fixtures that verify scanner, graph, MCP, and viewer behavior.",
+        "why": "This layer protects the expected behavior as the project changes.",
+        "how": "Aksi groups files under test directories or with test naming into this component.",
+        "role": "Validates local analysis and integration behavior.",
+    },
+    "core": {
+        "name": "Application Core",
+        "detail": "General-purpose source files that do not match a more specific architecture component.",
+        "why": "Some projects keep essential domain logic in neutral modules that still need architectural representation.",
+        "how": "Aksi places unmatched scanned files here after checking more specific component heuristics.",
+        "role": "Holds shared or domain-specific implementation code.",
+    },
+}
+
+
+def component_role_for_file(path: str, symbols: list[Any]) -> str:
+    lowered = path.lower()
+    name = Path(path).name.lower()
+    symbol_text = " ".join(getattr(symbol, "name", "") for symbol in symbols).lower()
+    combined = f"{lowered} {symbol_text}"
+
+    if lowered.startswith(("tests/", "test/")) or name.startswith("test_") or name.endswith(".test.ts"):
+        return "tests"
+    if lowered.startswith("scripts/") or name in {"aksi.py", "cli.py", "main.py"} or "setup" in combined:
+        return "scripts"
+    if "mcp" in lowered or name in {"server.py", "server.ts", "server.tsx", "app.py", "app.ts", "app.tsx", "api.py", "api.ts"}:
+        return "interface"
+    if any(token in combined for token in ("scanner", "parser", "tree_sitter", "tree-sitter", "extract")):
+        return "scanner"
+    if any(token in combined for token in ("graph", "architecture", "dependency", "visualization")):
+        return "graph"
+    if lowered.startswith("ui/") or name.endswith(".html") or "viewer" in combined or "render" in combined:
+        return "viewer"
+    if "prompt" in lowered:
+        return "prompt"
+    if any(token in combined for token in ("memory", "db", "database", "embedding", "fewshot", "few_shot", "feedback", "context", "summary")):
+        return "memory"
+    if "prompt" in combined:
+        return "prompt"
+    if any(token in combined for token in ("mcp", "server", "route", "api", "app.")):
+        return "interface"
+    return "core"
+
+
+def add_architecture_components(architecture: dict[str, Any], result: ScanResult) -> None:
+    nodes = architecture["nodes"]
+    role_files: dict[str, list[str]] = {}
+    file_to_component: dict[str, str] = {}
+    scanned_by_path = {item.path: item for item in result.files}
+
+    for scanned_file in result.files:
+        role = component_role_for_file(scanned_file.path, scanned_file.symbols)
+        role_files.setdefault(role, []).append(scanned_file.path)
+
+    components: list[dict[str, Any]] = []
+    for role, paths in sorted(role_files.items(), key=lambda item: COMPONENT_DEFINITIONS[item[0]]["name"]):
+        definition = COMPONENT_DEFINITIONS[role]
+        children = [file_id(path) for path in sorted(paths)]
+        stale = any(nodes[child].get("stale") for child in children if child in nodes)
+        unused = all(nodes[child].get("unused") for child in children if child in nodes)
+        component = make_node(
+            component_id(definition["name"]),
+            "component",
+            definition["name"],
+            ".",
+            role=role,
+            detail=definition["detail"],
+            why=definition["why"],
+            how=definition["how"],
+            stale=stale,
+            unused=unused,
+            files=sorted(paths),
+            file_count=len(paths),
+            symbol_count=sum(len(scanned_by_path[path].symbols) for path in paths),
+            import_count=sum(len(scanned_by_path[path].imports) for path in paths),
+        )
+        component["children"] = children
+        nodes[component["id"]] = component
+        components.append(component)
+        for path in paths:
+            file_to_component[path] = component["id"]
+
+    component_edge_map: dict[tuple[str, str], dict[str, Any]] = {}
+    for edge in architecture.get("edges", []):
+        source_node = nodes.get(edge.get("source", ""))
+        target_node = nodes.get(edge.get("target", ""))
+        if not source_node or not target_node:
+            continue
+        if source_node.get("type") != "file" or target_node.get("type") != "file":
+            continue
+        source_component = file_to_component.get(source_node.get("path", ""))
+        target_component = file_to_component.get(target_node.get("path", ""))
+        if not source_component or not target_component or source_component == target_component:
+            continue
+        key = (source_component, target_component)
+        if key not in component_edge_map:
+            component_edge_map[key] = {
+                "id": f"component-edge:{slug(source_component)}:{slug(target_component)}",
+                "type": "component_dependency",
+                "source": source_component,
+                "target": target_component,
+                "count": 0,
+                "imports": [],
+            }
+        component_edge_map[key]["count"] += 1
+        component_edge_map[key]["imports"].append(edge.get("import_text") or edge.get("module") or "")
+
+    for edge in component_edge_map.values():
+        imports = [item for item in edge.pop("imports") if item]
+        edge["import_text"] = f"{edge['count']} local dependency" + ("" if edge["count"] == 1 else " relationships")
+        if imports:
+            edge["examples"] = imports[:5]
+
+    architecture["components"] = components
+    architecture["component_edges"] = sorted(component_edge_map.values(), key=lambda edge: edge["id"])
+
+
 def build_architecture(result: ScanResult) -> dict[str, Any]:
     root_id = "repo:."
     root_path = Path(result.repo_path)
@@ -321,6 +494,7 @@ def build_architecture(result: ScanResult) -> dict[str, Any]:
         "repo_summary": repo_summary(result),
     }
     annotate_usage(architecture, result, local_import_targets, local_import_sources)
+    add_architecture_components(architecture, result)
     return architecture
 
 
@@ -368,6 +542,13 @@ def refresh_stale_flags(architecture: dict[str, Any], repo_path: str | Path = ".
         relpath = node.get("path")
         if relpath in stale_by_path:
             node["stale"] = stale_by_path[relpath]
+
+    for component in architecture.get("components", []):
+        stale = any(nodes.get(child, {}).get("stale") for child in component.get("children", []))
+        component["stale"] = stale
+        if component.get("id") in nodes:
+            nodes[component["id"]]["stale"] = stale
+
     architecture["scanner"] = {**architecture.get("scanner", {}), "stale_files": sum(stale_by_path.values())}
     return architecture
 
@@ -384,6 +565,7 @@ def summarize_architecture(architecture: dict[str, Any]) -> dict[str, Any]:
         "files": len(files),
         "symbols": len(symbols),
         "edges": len(architecture.get("edges", [])),
+        "components": len(architecture.get("components", [])),
         "stale_files": sum(1 for node in files if node.get("stale")),
         "unused_files": architecture.get("analysis", {}).get("unused_files", 0),
         "unused_symbols": architecture.get("analysis", {}).get("unused_symbols", 0),

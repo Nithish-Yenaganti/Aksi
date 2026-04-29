@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from graph import build_architecture, file_id, refresh_stale_flags, write_architecture
+from graph import build_architecture, component_id, file_id, refresh_stale_flags, write_architecture
 from scanner import scan_repo
 
 
@@ -78,3 +78,23 @@ def test_graph_resolves_typescript_extensionless_and_js_imports(tmp_path: Path) 
     assert any(edge["target"] == file_id("tools/recordFeedback.ts") for edge in architecture["edges"])
     assert nodes[file_id("memory/db.ts")]["unused"] is False
     assert nodes[file_id("tools/recordFeedback.ts")]["unused"] is False
+
+
+def test_graph_builds_project_architecture_components(tmp_path: Path) -> None:
+    (tmp_path / "mcp_server.py").write_text("from graph import build\n\ndef serve():\n    return build()\n", encoding="utf-8")
+    (tmp_path / "graph.py").write_text("def build():\n    return 1\n", encoding="utf-8")
+    (tmp_path / "scanner.py").write_text("def scan():\n    return []\n", encoding="utf-8")
+    (tmp_path / "ui").mkdir()
+    (tmp_path / "ui" / "index.html").write_text("<script>function render() { return true; }</script>", encoding="utf-8")
+
+    architecture = build_architecture(scan_repo(tmp_path))
+    nodes = architecture["nodes"]
+    component_names = {component["name"] for component in architecture["components"]}
+
+    assert "Agent and MCP Interface" in component_names
+    assert "Architecture Graph Builder" in component_names
+    assert "Source Scanner" in component_names
+    assert "Static Viewer" in component_names
+    assert component_id("Architecture Graph Builder") in nodes
+    assert nodes[component_id("Static Viewer")]["files"] == ["ui/index.html"]
+    assert any(edge["type"] == "component_dependency" for edge in architecture["component_edges"])

@@ -86,7 +86,7 @@ scripts/setup_mcp.sh --claude-desktop
 
 Available tools:
 
-- `generate_visualization(path: str = ".")`
+- `generate_visualization(path: str = ".", summarize: bool = False, llm_provider: str | None = None, llm_model: str | None = None)`
 - `scan_repo(path: str = ".")`
 - `get_map(path: str = ".")`
 - `get_context(node_id: str, path: str = ".")`
@@ -110,6 +110,20 @@ Normal MCP workflow:
 4. The host calls `get_context` for exact source before writing any explanation.
 5. The host writes the summary and calls `save_summary`.
 6. Aksi stores summaries under `Files/context/` with file hashes, so `get_summary` can report stale summaries after source changes.
+
+Optional direct LLM summaries:
+
+```bash
+OPENAI_API_KEY=... python aksi.py --summarize
+```
+
+Or through MCP:
+
+```text
+generate_visualization(path=".", summarize=True, llm_provider="openai")
+```
+
+With `summarize=True`, Aksi still scans, builds the graph, detects stale files, marks unused-code hints, and writes the UI locally. The configured LLM is used only to write repo and architecture-component summaries, which Aksi stores under `Files/context/`. For tests or dry runs, use `llm_provider="mock"`.
 
 ## View the Map
 

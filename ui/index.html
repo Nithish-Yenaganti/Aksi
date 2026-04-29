@@ -173,6 +173,7 @@
     .node.struct rect,
     .node.type rect { fill: var(--symbol); }
     .node.external rect { fill: var(--external); stroke-dasharray: 4 3; }
+    .node.component rect { fill: #075057; stroke: #b9e0e7; }
     .node.input rect { fill: #06464f; stroke: #d2ecf2; }
     .node.process rect { fill: #053941; stroke: #8bcfd7; }
     .node.artifact rect { fill: #075057; stroke: #b9e0e7; }
@@ -354,6 +355,7 @@
         struct: "struct name",
         type: "type name",
         external: "external name",
+        component: "architecture component",
         input: "input",
         process: "process",
         artifact: "artifact",
@@ -587,7 +589,38 @@
     }
 
     function buildArchitectureView(graph) {
-      return dependencyItems(graph, "architecture module");
+      const components = (graph.components || []).map(component => ({
+        ...component,
+        children: [],
+        kindLabel: "architecture component",
+        showKindLabel: true,
+      }));
+      if (!components.length) {
+        return dependencyItems(graph, "architecture module");
+      }
+
+      const componentIds = new Set(components.map(component => component.id));
+      const edges = (graph.component_edges || []).filter(edge => componentIds.has(edge.source) && componentIds.has(edge.target));
+      const levelById = new Map(components.map(component => [component.id, 0]));
+
+      for (let pass = 0; pass < components.length; pass += 1) {
+        let changed = false;
+        for (const edge of edges) {
+          const sourceLevel = levelById.get(edge.source) || 0;
+          const targetLevel = levelById.get(edge.target) || 0;
+          if (targetLevel <= sourceLevel) {
+            levelById.set(edge.target, sourceLevel + 1);
+            changed = true;
+          }
+        }
+        if (!changed) break;
+      }
+
+      components.forEach(component => {
+        component.level = clamp(levelById.get(component.id) || 0, 0, 8);
+        measureNode(component);
+      });
+      return { items: components, edges };
     }
 
     function layoutArchitectureItems(items) {
@@ -680,6 +713,15 @@
     }
 
     function describeArchitectureNode(node, incoming, outgoing) {
+      if (node.type === "component") {
+        const countText = `${node.file_count || 0} file${node.file_count === 1 ? "" : "s"}`;
+        return {
+          what: node.detail || `${node.name} is a project architecture component.`,
+          why: node.why || "It groups source files by their role in the scanned project, not just by folder location.",
+          how: node.how || "Aksi detected this component locally from file paths, names, symbols, and import relationships.",
+          role: node.role || `Architecture component containing ${countText}, with ${incoming.length} incoming and ${outgoing.length} outgoing component relationship${incoming.length + outgoing.length === 1 ? "" : "s"}.`,
+        };
+      }
       return {
         what: node.detail || `${node.name} is a module in the scanned repository architecture.`,
         why: node.why || "It appears in the architecture view because it is a local source file or dependency endpoint.",
@@ -940,7 +982,10 @@
       svg.call(zoomBehavior);
       svg.call(zoomBehavior.transform, fitTransform(bounds));
 
-      meta.textContent = `${items.length} architecture modules · ${edges.length} dependency relationships · local-first analysis`;
+      const componentMode = (graph.components || []).length > 0;
+      meta.textContent = componentMode
+        ? `${items.length} architecture components · ${edges.length} component relationships · local-first candidates`
+        : `${items.length} architecture modules · ${edges.length} dependency relationships · local-first analysis`;
     }
 
     function renderRuntimeFlow(graph) {

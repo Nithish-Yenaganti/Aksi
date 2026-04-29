@@ -18,7 +18,7 @@ multilang = [
 ]
 
 [tool.setuptools]
-py-modules = ["aksi", "scanner", "graph", "mcp_server"]
+py-modules = ["aksi", "scanner", "graph", "mcp_server", "llm_summary"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

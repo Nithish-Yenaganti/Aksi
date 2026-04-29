@@ -67,6 +67,7 @@ LANGUAGE_BY_SUFFIX = {
     ".go": "go",
     ".rs": "rust",
     ".rb": "ruby",
+    ".html": "html",
 }
 
 SYMBOL_NODE_TYPES = {
