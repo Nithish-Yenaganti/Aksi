@@ -741,7 +741,7 @@ def _summary_completion(worklist: list[dict[str, Any]]) -> dict[str, Any]:
         "required_action": required_action if remaining else "No host summary work is currently required.",
         "note": (
             "The viewer can show the graph before summaries are complete, but rectangle explanations "
-            "only become grounded after save_summary updates Files/context/index.json."
+            "only become grounded after save_summaries updates Files/context/index.json."
         ),
     }
 
@@ -1703,14 +1703,6 @@ def _scan_repository(
 
 
 @mcp.tool
-def scan_repo(path: str = ".") -> dict[str, Any]:
-    """Scan a repository and write Files/architecture.json."""
-    repo = _repo(path)
-    result, _architecture = _scan_repository(repo)
-    return result
-
-
-@mcp.tool
 def generate_visualization(
     path: str = ".",
     summarize: bool = True,
@@ -1797,7 +1789,7 @@ def generate_visualization(
             "Host LLM should call get_model_seed(path) first for compact local Architecture/Runtime candidates.",
             "Host LLM calls save_architecture_model(model, path) for an optional grounded architecture model.",
             "Host LLM calls save_runtime_model(model, path) for an optional grounded runtime/input-flow model.",
-            "Refined models do not clear summary_worklist; only save_summaries/save_summary clears summary work.",
+            "Refined models do not clear summary_worklist; only save_summaries clears summary work.",
             "Mark uncertainty and do not add unsupported components, flows, callers, dependencies, or runtime behavior.",
             "Aksi regenerates Files/index.html and the viewer prefers saved host-refined models.",
         ],
@@ -1824,7 +1816,7 @@ def generate_visualization(
             "Treat summary_worklist as the executable queue; do not iterate summary_targets directly for required work.",
             "If summary_completion.required is true, call get_context_batch or get_summary_context_bundle for summary_worklist items and write grounded host-LLM summaries.",
             "Verify each summary matches the exact get_context node, path, type, source, edges, neighbors, and context limits; re-summarize mismatches before saving.",
-            "Call save_summaries for verified explanations, or save_summary for a single targeted explanation, then re-check completion with get_summary_worklist or generate_visualization.",
+            "Call save_summaries for verified explanations, then re-check completion with get_summary_worklist or generate_visualization.",
             "Only say saved rectangle summaries are current when summary_mode is host_llm_worklist and refreshed summary_completion.complete is true.",
             "If summary_mode is disabled, say the graph is ready without summary targets.",
             "After summaries are current, inspect model_refinement; if architecture_required or runtime_required is true, call get_model_seed, then write grounded refined models from seed/map/context evidence.",
@@ -1982,7 +1974,6 @@ def get_summary_context_bundle(path: str = ".", limit: int | None = None, includ
     return get_context_batch(node_ids=None, path=path, limit=limit, include_source=include_source)
 
 
-@mcp.tool
 def save_summary(node_id: str, summary: Any, path: str = ".") -> dict[str, Any]:
     """Persist an LLM-written summary for a node using the current file hash."""
     repo = _repo(path)
@@ -2056,7 +2047,6 @@ def save_summaries(items: list[dict[str, Any]], path: str = ".") -> dict[str, An
     }
 
 
-@mcp.tool
 def get_summary(node_id: str, path: str = ".") -> dict[str, Any]:
     """Return a saved node summary and whether it is stale."""
     repo = _repo(path)
@@ -2073,7 +2063,6 @@ def get_summary(node_id: str, path: str = ".") -> dict[str, Any]:
     return record
 
 
-@mcp.tool
 def list_summaries(path: str = ".") -> dict[str, Any]:
     """List saved summaries for the repository."""
     repo = _repo(path)
@@ -2101,7 +2090,6 @@ def save_runtime_model(model: dict[str, Any], path: str = ".") -> dict[str, Any]
         return {"error": str(error), "model_type": "runtime"}
 
 
-@mcp.tool
 def get_models(path: str = ".") -> dict[str, Any]:
     """Return saved host-refined architecture and runtime models."""
     repo = _repo(path)

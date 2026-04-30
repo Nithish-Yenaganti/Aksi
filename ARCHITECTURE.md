@@ -112,7 +112,7 @@ The summary lifecycle is:
 
 ```text
 summary_targets -> summary_worklist -> get_context/get_context_batch
--> host LLM summary -> save_summary/save_summaries
+-> host LLM summary -> save_summaries
 -> Files/context/*.json -> Files/context/index.json -> Files/index.html
 ```
 

@@ -339,7 +339,7 @@ def test_generate_visualization_returns_host_llm_summary_targets(tmp_path: Path)
     assert component_ids.issubset(architecture_ids)
     assert "file:mcp_server.py" in runtime_ids
     assert "file:graph.py" in runtime_ids
-    assert "save_summary" in " ".join(result["next_steps"])
+    assert "save_summaries" in " ".join(result["next_steps"])
     assert result["next_steps"][0].startswith("Inspect summary_mode")
     assert "viewer_http_url and viewer_url are withheld" in " ".join(result["next_steps"])
     assert "do not clear summary_worklist" in " ".join(result["next_steps"])

@@ -71,7 +71,7 @@ fresh   -> action: skip
 
 Use `summary_worklist` or `recommended_batch.node_ids` as the executable queue. Do not iterate raw `summary_targets` for required work.
 
-`save_summaries` stores host-written summaries under `Files/context/`, updates `Files/context/index.json`, and regenerates `Files/index.html` once for the batch. `save_summary` is available for targeted one-node workflows.
+`save_summaries` stores host-written summaries under `Files/context/`, updates `Files/context/index.json`, and regenerates `Files/index.html` once for the batch.
 
 Only summary saves clear summary work. Saving Architecture or Runtime models does not clear `summary_worklist`.
 
@@ -110,19 +110,14 @@ Saved refined models include a source graph hash. If the graph changes, `model_r
 - `generate_visualization(path=".", summarize=True, prepare_summary_targets=None, serve_viewer=True, response_mode="compact|full")`
 - `get_workflow_status(path=".", limit=None, prepare_summary_targets=True, response_mode="compact|full")`
 - `get_model_seed(path=".")`
-- `scan_repo(path=".")`
 - `get_map(path=".")`
 - `get_summary_worklist(path=".")`
 - `get_context(node_id, path=".")`
 - `get_context_batch(node_ids=None, path=".", limit=None, include_source=True)`
 - `get_summary_context_bundle(path=".", limit=None, include_source=True)`
-- `save_summary(node_id, summary, path=".")`
 - `save_summaries(items, path=".")`
-- `get_summary(node_id, path=".")`
-- `list_summaries(path=".")`
 - `save_architecture_model(model, path=".")`
 - `save_runtime_model(model, path=".")`
-- `get_models(path=".")`
 - `stop_viewer(path=".")`
 
 Prefer `response_mode="compact"` for normal agent loops. Use full responses only when complete targets, complete worklists, schemas, or long workflow text are needed.

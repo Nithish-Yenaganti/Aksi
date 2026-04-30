@@ -172,16 +172,11 @@ Do not commit `Files/`.
 - `get_context(...)`
 - `get_context_batch(...)`
 - `get_summary_context_bundle(...)`
-- `save_summary(...)`
 - `save_summaries(...)`
 - `save_architecture_model(...)`
 - `save_runtime_model(...)`
 - `get_map(...)`
-- `get_summary(...)`
-- `list_summaries(...)`
-- `get_models(...)`
 - `stop_viewer(...)`
-- `scan_repo(...)`
 
 Use `response_mode="compact"` for normal agent loops. Use full responses only when complete target, worklist, or schema payloads are needed.
 
