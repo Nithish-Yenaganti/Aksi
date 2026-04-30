@@ -582,6 +582,22 @@
       ].filter(Boolean).join(" ");
     }
 
+    function nodeHasDisplaySummary(node) {
+      const saved = summaryIndex[node.id];
+      if (saved?.summary) return true;
+      return Boolean(
+        node.purpose ||
+        node.behavior ||
+        node.summary ||
+        node.responsibility ||
+        node.how_it_works ||
+        node.relationships ||
+        node.interfaces ||
+        node.dependencies ||
+        node.used_by
+      );
+    }
+
     function nodeSearchText(node) {
       return [
         node.name,
@@ -589,6 +605,15 @@
         node.type,
         node.language,
         savedSummaryText(node),
+        node.purpose,
+        node.behavior,
+        node.summary,
+        node.responsibility,
+        node.how_it_works,
+        node.relationships,
+        node.interfaces,
+        node.dependencies,
+        node.used_by,
       ].filter(Boolean).join(" ").toLowerCase();
     }
 
@@ -596,7 +621,7 @@
       const saved = summaryIndex[node.id];
       if (filterState.status === "stale") return Boolean(node.stale || saved?.stale);
       if (filterState.status === "unused") return Boolean(node.unused);
-      if (filterState.status === "missing") return !saved?.summary;
+      if (filterState.status === "missing") return !nodeHasDisplaySummary(node);
       return true;
     }
 

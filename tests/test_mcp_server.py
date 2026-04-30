@@ -43,6 +43,8 @@ def test_mcp_helpers_return_expected_shapes(tmp_path: Path) -> None:
     assert "__AKSI_ARCHITECTURE__" in viewer
     assert 'id="searchBox"' in viewer
     assert 'data-filter="missing"' in viewer
+    assert "function nodeHasDisplaySummary" in viewer
+    assert "return !nodeHasDisplaySummary(node)" in viewer
     assert "Export SVG" in viewer
     assert "Export PNG" in viewer
     assert "Copy Summary" in viewer
