@@ -16,7 +16,14 @@ from urllib.parse import quote
 
 from fastmcp import FastMCP
 
-from graph import load_architecture, refresh_stale_flags, slug, summarize_architecture, write_architecture
+from graph import (
+    is_probable_entrypoint,
+    load_architecture,
+    refresh_stale_flags,
+    slug,
+    summarize_architecture,
+    write_architecture,
+)
 
 mcp = FastMCP("Aksi")
 _VIEWER_SERVERS: dict[str, tuple[socketserver.TCPServer, int]] = {}
@@ -993,6 +1000,7 @@ def _model_seed(repo: Path) -> dict[str, Any]:
         }
         for edge in architecture.get("component_edges", [])
     ]
+    all_dependency_edges = architecture.get("edges", [])
     dependency_edges = [
         {
             "id": edge.get("id"),
@@ -1003,15 +1011,185 @@ def _model_seed(repo: Path) -> dict[str, Any]:
             "module": edge.get("module"),
             "is_external": str(edge.get("target", "")).startswith("external:"),
         }
-        for edge in architecture.get("edges", [])[:80]
+        for edge in all_dependency_edges[:80]
     ]
     external_dependencies = sorted(
         {
             nodes[edge.get("target", "")].get("name")
-            for edge in architecture.get("edges", [])
+            for edge in all_dependency_edges
             if str(edge.get("target", "")).startswith("external:") and edge.get("target", "") in nodes
         }
     )
+    architecture_candidate_components = []
+    for component in architecture_components:
+        evidence_files = [
+            {
+                "id": node.get("id"),
+                "path": node.get("path"),
+                "language": node.get("language"),
+                "incoming_local_imports": node.get("usage_count", 0),
+                "outgoing_local_imports": node.get("outgoing_usage_count", 0),
+                "stale": bool(node.get("stale")),
+            }
+            for node in sorted(
+                (file_node for file_node in files if file_node.get("path") in set(component.get("files", []))),
+                key=lambda item: (
+                    -int(item.get("usage_count") or 0),
+                    -int(item.get("outgoing_usage_count") or 0),
+                    item.get("path", ""),
+                ),
+            )[:10]
+        ]
+        connected_edges = [
+            edge
+            for edge in component_edges
+            if edge.get("source", {}).get("id") == component.get("id")
+            or edge.get("target", {}).get("id") == component.get("id")
+        ]
+        architecture_candidate_components.append(
+            {
+                **component,
+                "evidence_files": evidence_files,
+                "component_edges": connected_edges,
+                "confidence": "high" if evidence_files else "medium",
+            }
+        )
+
+    entrypoint_ids = {item.get("id") for item in entrypoints if item.get("id")}
+    ordered_flows = []
+    for entrypoint in entrypoints[:8]:
+        source_id = entrypoint.get("id")
+        if not source_id:
+            continue
+        seen = {source_id}
+        frontier = [source_id]
+        steps = []
+        while frontier and len(steps) < 12:
+            current = frontier.pop(0)
+            outgoing_edges = [
+                edge
+                for edge in all_dependency_edges
+                if edge.get("source") == current and edge.get("target") not in seen
+            ]
+            for edge in outgoing_edges:
+                target_id = edge.get("target")
+                target = nodes.get(target_id or "", {})
+                steps.append(
+                    {
+                        "edge_id": edge.get("id"),
+                        "from": endpoint(edge, "source"),
+                        "to": endpoint(edge, "target"),
+                        "module": edge.get("module"),
+                        "import_text": edge.get("import_text"),
+                        "is_external": str(target_id).startswith("external:"),
+                    }
+                )
+                if target_id:
+                    seen.add(target_id)
+                if target.get("type") == "file":
+                    frontier.append(str(target_id))
+                if len(steps) >= 12:
+                    break
+        ordered_flows.append(
+            {
+                "entrypoint": entrypoint,
+                "steps": steps,
+                "confidence": "medium" if steps else "low",
+                "note": "Static dependency order from local import edges; not traced execution.",
+            }
+        )
+
+    data_artifact_suffixes = {
+        ".csv",
+        ".db",
+        ".env",
+        ".ini",
+        ".json",
+        ".md",
+        ".sqlite",
+        ".sql",
+        ".toml",
+        ".xml",
+        ".yaml",
+        ".yml",
+    }
+    data_artifact_paths = {node.get("path") for node in files if node.get("path")}
+    scanned_data_artifacts = [
+        {
+            "id": node.get("id"),
+            "path": node.get("path"),
+            "language": node.get("language"),
+            "stale": bool(node.get("stale")),
+            "reason": "configuration_or_data_file",
+        }
+        for node in sorted(files, key=lambda item: item.get("path", ""))
+        if Path(str(node.get("path", ""))).suffix.lower() in data_artifact_suffixes
+    ]
+    ignored_artifact_dirs = {
+        ".git",
+        ".hg",
+        ".svn",
+        ".venv",
+        "venv",
+        "env",
+        "node_modules",
+        "Files",
+        "__pycache__",
+        ".pytest_cache",
+        ".mypy_cache",
+        ".ruff_cache",
+        ".cache",
+        "dist",
+        "build",
+        "target",
+        "coverage",
+    }
+    discovered_data_artifacts = []
+    for path in sorted(repo.rglob("*")):
+        if not path.is_file() or path.suffix.lower() not in data_artifact_suffixes:
+            continue
+        relative_path = path.relative_to(repo).as_posix()
+        if relative_path in data_artifact_paths or any(part in ignored_artifact_dirs for part in path.relative_to(repo).parts):
+            continue
+        discovered_data_artifacts.append(
+            {
+                "id": None,
+                "path": relative_path,
+                "language": None,
+                "stale": False,
+                "reason": "configuration_or_data_file",
+            }
+        )
+    data_artifacts = (scanned_data_artifacts + discovered_data_artifacts)[:25]
+    evidence_file_ids = {
+        file_item.get("id")
+        for component in architecture_candidate_components
+        for file_item in component.get("evidence_files", [])
+        if file_item.get("id")
+    }
+    evidence_files = [
+        {
+            "id": node.get("id"),
+            "path": node.get("path"),
+            "language": node.get("language"),
+            "incoming_local_imports": node.get("usage_count", 0),
+            "outgoing_local_imports": node.get("outgoing_usage_count", 0),
+            "stale": bool(node.get("stale")),
+        }
+        for node in sorted(files, key=lambda item: item.get("path", ""))
+        if node.get("id") in evidence_file_ids or node.get("id") in entrypoint_ids
+    ][:30]
+    must_read_ids = []
+    for item in entrypoints + architecture_components[:8]:
+        node_id = item.get("id")
+        if node_id and node_id not in must_read_ids:
+            must_read_ids.append(node_id)
+    optional_ids = []
+    for item in key_files + data_artifacts:
+        node_id = item.get("id")
+        if node_id and node_id not in must_read_ids and node_id not in optional_ids:
+            optional_ids.append(node_id)
+
     stale_files = [
         {"id": node.get("id"), "path": node.get("path")}
         for node in sorted(files, key=lambda item: item.get("path", ""))
@@ -1088,11 +1266,41 @@ def _model_seed(repo: Path) -> dict[str, Any]:
             "dependency_edges": dependency_edges,
             "external_dependencies": external_dependencies,
             "unresolved_externals": external_dependencies,
-            "truncated_dependency_edges": max(0, len(architecture.get("edges", [])) - len(dependency_edges)),
+            "truncated_dependency_edges": max(0, len(all_dependency_edges) - len(dependency_edges)),
             "instruction": (
                 "Host LLM should infer a cautious input/data flow only from dependency edges and context evidence. "
                 "Do not claim traced runtime execution unless source context proves it."
             ),
+        },
+        "architecture_candidates": {
+            "components": architecture_candidate_components,
+            "evidence_files": evidence_files,
+            "component_edges": component_edges,
+            "confidence": "high" if architecture_candidate_components else "low",
+            "instruction": (
+                "Use components as local candidates, evidence_files and component_edges as grounding, "
+                "and keep confidence explicit in the refined model."
+            ),
+        },
+        "runtime_candidates": {
+            "entrypoints": entrypoints,
+            "ordered_flows": ordered_flows,
+            "external_dependencies": external_dependencies,
+            "data_artifacts": data_artifacts,
+            "confidence": "medium" if ordered_flows else "low",
+            "instruction": (
+                "ordered_flows are static import/dependency paths from likely entrypoints; confirm behavior "
+                "with context before describing runtime execution."
+            ),
+        },
+        "recommended_context": {
+            "must_read": must_read_ids,
+            "optional": optional_ids[:20],
+            "reason": (
+                "Read likely entrypoints and local architecture component nodes first, then optional key files "
+                "or data artifacts when refining uncertain edges and data flow."
+            ),
+            "recommended_tool": "get_context_batch",
         },
         "risk_hints": {
             "stale_files": stale_files,
@@ -1110,6 +1318,257 @@ def _model_seed(repo: Path) -> dict[str, Any]:
             "nodes": "Non-empty list of {id, name, type, summary/detail, confidence, evidence_node_ids}.",
             "edges": "List of {source, target, type, label/detail, evidence_edge_ids}; endpoints must reference model node ids.",
         },
+    }
+
+
+def _digest_limit(mode: str, brief: int, full: int) -> int:
+    return full if mode == "full" else brief
+
+
+def _compact_file(node: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "id": node.get("id"),
+        "path": node.get("path"),
+        "language": node.get("language"),
+        "incoming_local_imports": node.get("usage_count", 0),
+        "outgoing_local_imports": node.get("outgoing_usage_count", 0),
+        "stale": bool(node.get("stale")),
+        "unused_hint": bool(node.get("unused")),
+        "reason": node.get("dead_reason"),
+    }
+
+
+def _repo_digest(repo: Path, mode: str = "brief") -> dict[str, Any]:
+    normalized_mode = "full" if mode == "full" else "brief"
+    architecture = refresh_stale_flags(load_architecture(repo), repo)
+    nodes = architecture.get("nodes", {})
+    summary_targets = _summary_targets(repo, architecture)
+    summary_worklist = _summary_worklist(summary_targets)
+    summary_completion = _summary_completion(summary_worklist)
+    model_refinement = _model_refinement_status(repo, architecture)
+    workflow_complete = bool(summary_completion["complete"] and model_refinement["complete"])
+    if not summary_completion["complete"]:
+        next_action = "summarize_batch"
+        next_tool = "get_summary_context_bundle"
+    elif not model_refinement["complete"]:
+        next_action = "refine_models"
+        next_tool = "get_model_seed"
+    else:
+        next_action = "release_viewer"
+        next_tool = "get_workflow_status"
+    files = [node for node in nodes.values() if node.get("type") == "file"]
+    symbols = [
+        node
+        for node in nodes.values()
+        if node.get("type") in {"function", "class", "interface", "struct", "type"}
+    ]
+    counts = summarize_architecture(architecture)
+    language_counts: dict[str, int] = {}
+    for node in files:
+        language = node.get("language") or "unknown"
+        language_counts[language] = language_counts.get(language, 0) + 1
+
+    entrypoints = [
+        _compact_file(node)
+        for node in sorted(files, key=lambda item: item.get("path", ""))
+        if is_probable_entrypoint(str(node.get("path", "")))
+    ]
+    if not entrypoints and files:
+        fallback = sorted(files, key=lambda item: item.get("path", ""))[0]
+        entrypoints.append(
+            {
+                **_compact_file(fallback),
+                "local_static_note": "Fallback candidate because no conventional entrypoint was found.",
+            }
+        )
+
+    component_limit = _digest_limit(normalized_mode, 8, 25)
+    edge_limit = _digest_limit(normalized_mode, 10, 60)
+    hint_limit = _digest_limit(normalized_mode, 10, 50)
+    inspect_limit = _digest_limit(normalized_mode, 8, 30)
+
+    major_components = [
+        {
+            "id": component.get("id"),
+            "name": component.get("name"),
+            "role": component.get("role"),
+            "local_static_basis": component.get("why"),
+            "file_count": component.get("file_count", 0),
+            "symbol_count": component.get("symbol_count", 0),
+            "import_count": component.get("import_count", 0),
+            "files": component.get("files", [])[:_digest_limit(normalized_mode, 6, 20)],
+            "stale": bool(component.get("stale")),
+            "unused_hint": bool(component.get("unused")),
+        }
+        for component in sorted(
+            architecture.get("components", []),
+            key=lambda item: (-int(item.get("file_count") or 0), item.get("name", "")),
+        )[:component_limit]
+    ]
+
+    def endpoint(edge: dict[str, Any], key: str) -> dict[str, Any]:
+        node = nodes.get(edge.get(key, ""), {})
+        return {
+            "id": edge.get(key),
+            "name": node.get("name") or edge.get(key),
+            "type": node.get("type"),
+            "path": node.get("path"),
+        }
+
+    component_edges = [
+        {
+            "source": endpoint(edge, "source"),
+            "target": endpoint(edge, "target"),
+            "type": edge.get("type"),
+            "import_text": edge.get("import_text"),
+            "count": edge.get("count", 1),
+        }
+        for edge in architecture.get("component_edges", [])[:edge_limit]
+    ]
+    dependency_edges = [
+        {
+            "source": endpoint(edge, "source"),
+            "target": endpoint(edge, "target"),
+            "type": edge.get("type"),
+            "module": edge.get("module"),
+            "import_text": edge.get("import_text"),
+            "is_external": str(edge.get("target", "")).startswith("external:"),
+        }
+        for edge in architecture.get("edges", [])[:edge_limit]
+    ]
+    external_dependencies = sorted(
+        {
+            nodes[edge.get("target", "")].get("name")
+            for edge in architecture.get("edges", [])
+            if str(edge.get("target", "")).startswith("external:") and edge.get("target", "") in nodes
+        }
+    )
+
+    stale_files = [_compact_file(node) for node in sorted(files, key=lambda item: item.get("path", "")) if node.get("stale")]
+    unused_files = [_compact_file(node) for node in sorted(files, key=lambda item: item.get("path", "")) if node.get("unused")]
+    unused_symbols = [
+        {
+            "id": node.get("id"),
+            "name": node.get("name"),
+            "path": node.get("path"),
+            "start_line": node.get("start_line"),
+            "reason": node.get("dead_reason"),
+        }
+        for node in sorted(symbols, key=lambda item: (item.get("path", ""), item.get("start_line", 0)))
+        if node.get("unused")
+    ]
+
+    risks = []
+    if stale_files:
+        risks.append(
+            {
+                "label": "stale_files",
+                "severity": "medium",
+                "local_static_reason": "Saved graph hashes differ from files currently on disk.",
+                "count": len(stale_files),
+            }
+        )
+    if unused_files or unused_symbols:
+        risks.append(
+            {
+                "label": "unused_hints",
+                "severity": "low",
+                "local_static_reason": architecture.get("analysis", {}).get("note"),
+                "file_count": len(unused_files),
+                "symbol_count": len(unused_symbols),
+            }
+        )
+    if external_dependencies:
+        risks.append(
+            {
+                "label": "external_dependencies",
+                "severity": "low",
+                "local_static_reason": "Static imports point outside scanned local files.",
+                "count": len(external_dependencies),
+            }
+        )
+
+    important_files = sorted(
+        files,
+        key=lambda item: (
+            not bool(item.get("stale")),
+            not is_probable_entrypoint(str(item.get("path", ""))),
+            -int(item.get("usage_count") or 0),
+            -int(item.get("outgoing_usage_count") or 0),
+            item.get("path", ""),
+        ),
+    )
+    next_files_to_inspect: list[dict[str, Any]] = []
+    seen_paths: set[str] = set()
+    for node in [*important_files, *files]:
+        path = node.get("path")
+        if not path or path in seen_paths:
+            continue
+        seen_paths.add(path)
+        reasons = []
+        if node.get("stale"):
+            reasons.append("stale_on_disk")
+        if is_probable_entrypoint(str(path)):
+            reasons.append("probable_entrypoint")
+        if node.get("usage_count"):
+            reasons.append("high_local_incoming_imports")
+        if node.get("outgoing_usage_count"):
+            reasons.append("has_local_outgoing_imports")
+        if node.get("unused"):
+            reasons.append("unused_static_hint")
+        next_files_to_inspect.append({**_compact_file(node), "local_static_reasons": reasons or ["representative_file"]})
+        if len(next_files_to_inspect) >= inspect_limit:
+            break
+
+    return {
+        "path": str(repo),
+        "mode": normalized_mode,
+        "source": "local_static_digest",
+        "llm_called_by_aksi": False,
+        "guess_policy": "Fields ending in _guess or local_static_* are local/static inferences from the saved graph, not traced runtime behavior.",
+        "repo": {
+            "name": nodes.get(architecture.get("root", ""), {}).get("name") or repo.name,
+            "purpose": architecture.get("repo_summary"),
+            "purpose_basis": "local/static summary of scanned files, languages, symbols, and imports",
+            "languages": dict(sorted(language_counts.items())),
+            "counts": counts,
+            "generated_at": architecture.get("generated_at"),
+        },
+        "workflow": {
+            "next_action": next_action,
+            "next_tool": next_tool,
+            "summary_remaining": len(summary_worklist),
+            "models_complete": bool(model_refinement["complete"]),
+            "viewer_releasable": workflow_complete,
+            "viewer_file": str(_viewer_path(repo)),
+            "viewer_url": _viewer_path(repo).as_uri() if workflow_complete else None,
+            "viewer_note": "Viewer URL is withheld until summaries and required model refinement are complete."
+            if not workflow_complete
+            else "Viewer can be released.",
+        },
+        "summary_completion": summary_completion,
+        "model_refinement": model_refinement,
+        "entrypoints": entrypoints[:inspect_limit],
+        "major_components": major_components,
+        "runtime_flow_guess": {
+            "kind": "local/static dependency flow guess",
+            "entrypoints": entrypoints[:inspect_limit],
+            "component_edges": component_edges,
+            "dependency_edges": dependency_edges,
+            "external_dependencies": external_dependencies[:hint_limit],
+            "truncated_component_edges": max(0, len(architecture.get("component_edges", [])) - len(component_edges)),
+            "truncated_dependency_edges": max(0, len(architecture.get("edges", [])) - len(dependency_edges)),
+        },
+        "risks": risks,
+        "unused_hints": {
+            "note": architecture.get("analysis", {}).get("note"),
+            "files": unused_files[:hint_limit],
+            "symbols": unused_symbols[:hint_limit],
+            "truncated_files": max(0, len(unused_files) - hint_limit),
+            "truncated_symbols": max(0, len(unused_symbols) - hint_limit),
+        },
+        "stale_files": stale_files[:hint_limit],
+        "next_files_to_inspect": next_files_to_inspect,
     }
 
 
@@ -1458,6 +1917,12 @@ def get_workflow_status(
 def get_model_seed(path: str = ".") -> dict[str, Any]:
     """Return compact local facts that help the host LLM refine Architecture and Runtime models."""
     return _model_seed(_repo(path))
+
+
+@mcp.tool
+def get_digest(path: str = ".", mode: str = "brief") -> dict[str, Any]:
+    """Return a compact local/static repository digest with no LLM calls."""
+    return _repo_digest(_repo(path), mode=mode)
 
 
 @mcp.tool

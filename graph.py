@@ -31,6 +31,10 @@ ENTRYPOINT_FILENAMES = {
     "server.ts",
     "server.tsx",
 }
+UNUSED_HINT_CONFIDENCE = "low"
+UNUSED_HINT_REASON = (
+    "No local static references found; dynamic imports, CLI entrypoints, tests, or framework wiring may still use this node."
+)
 
 
 def slug(value: str) -> str:
@@ -61,6 +65,14 @@ def make_node(node_id: str, node_type: str, name: str, path: str, **extra: Any) 
     node = {"id": node_id, "type": node_type, "name": name, "path": path, "children": []}
     node.update({key: value for key, value in extra.items() if value is not None})
     return node
+
+
+def set_unused_hint(node: dict[str, Any], unused: bool) -> None:
+    node["unused"] = unused
+    node["unused_hint"] = unused
+    if unused:
+        node["unused_confidence"] = UNUSED_HINT_CONFIDENCE
+        node["unused_reason"] = UNUSED_HINT_REASON
 
 
 def ensure_folder(nodes: dict[str, dict[str, Any]], parent_id: str, folder_path: str) -> str:
@@ -205,11 +217,11 @@ def annotate_usage(
         node["usage_count"] = incoming_count
         node["outgoing_usage_count"] = outgoing_count
         if incoming_count == 0 and outgoing_count == 0 and not is_probable_entrypoint(path):
-            node["unused"] = True
+            set_unused_hint(node, True)
             node["dead_reason"] = "No local files import this file; it may be unused or externally invoked."
             unused_files += 1
         else:
-            node["unused"] = False
+            set_unused_hint(node, False)
 
     for node in nodes.values():
         if node.get("type") not in SYMBOL_TYPES:
@@ -217,11 +229,11 @@ def annotate_usage(
         reference_count = count_symbol_references(node, source_texts)
         node["usage_count"] = reference_count
         if reference_count == 0 and not str(node.get("name", "")).startswith("__"):
-            node["unused"] = True
+            set_unused_hint(node, True)
             node["dead_reason"] = "No local references to this symbol were found outside its declaration line."
             unused_symbols += 1
         else:
-            node["unused"] = False
+            set_unused_hint(node, False)
 
     architecture["analysis"] = {
         "unused_files": unused_files,
@@ -371,6 +383,7 @@ def add_architecture_components(architecture: dict[str, Any], result: ScanResult
             symbol_count=sum(len(scanned_by_path[path].symbols) for path in paths),
             import_count=sum(len(scanned_by_path[path].imports) for path in paths),
         )
+        set_unused_hint(component, unused)
         component["children"] = children
         nodes[component["id"]] = component
         components.append(component)

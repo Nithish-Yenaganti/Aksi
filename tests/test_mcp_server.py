@@ -39,7 +39,13 @@ def test_mcp_helpers_return_expected_shapes(tmp_path: Path) -> None:
     assert root_target["action"] == "write"
     assert file_target["summary_status"] == "missing"
     assert Path(scan_summary["viewer_file"]).exists()
-    assert "__AKSI_ARCHITECTURE__" in Path(scan_summary["viewer_file"]).read_text(encoding="utf-8")
+    viewer = Path(scan_summary["viewer_file"]).read_text(encoding="utf-8")
+    assert "__AKSI_ARCHITECTURE__" in viewer
+    assert 'id="searchBox"' in viewer
+    assert 'data-filter="missing"' in viewer
+    assert "Export SVG" in viewer
+    assert "Export PNG" in viewer
+    assert "Copy Summary" in viewer
     assert scan_summary["summary_index_file"].endswith("Files/context/index.json")
     assert graph["root"] == "repo:."
     assert "def run" in context["source"]
@@ -486,6 +492,7 @@ def test_read_only_tools_do_not_regenerate_viewer_or_index(tmp_path: Path) -> No
     mcp_server.get_summary_worklist(str(tmp_path))
     mcp_server.get_workflow_status(str(tmp_path), response_mode="compact")
     mcp_server.get_context_batch(path=str(tmp_path), limit=1, include_source=False)
+    mcp_server.get_digest(str(tmp_path))
     mcp_server.list_summaries(str(tmp_path))
 
     assert viewer_path.read_text(encoding="utf-8") == original_viewer
@@ -583,6 +590,7 @@ def test_get_model_seed_returns_compact_refinement_facts(tmp_path: Path) -> None
         encoding="utf-8",
     )
     (tmp_path / "utils.ts").write_text("export function helper() {\n  return 'ok';\n}\n", encoding="utf-8")
+    (tmp_path / "settings.json").write_text('{"feature": true}\n', encoding="utf-8")
     mcp_server.generate_visualization(str(tmp_path), serve_viewer=False)
 
     seed = mcp_server.get_model_seed(str(tmp_path))
@@ -600,8 +608,81 @@ def test_get_model_seed_returns_compact_refinement_facts(tmp_path: Path) -> None
     assert any(item["path"] == "server.ts" for item in seed["architecture_seed"]["entrypoints"])
     assert any(item["path"] == "server.ts" for item in seed["key_files"])
     assert "get_context_batch" == seed["required_context"]["recommended_tool"]
+    assert seed["architecture_candidates"]["components"]
+    assert seed["architecture_candidates"]["evidence_files"]
+    assert seed["architecture_candidates"]["component_edges"] or seed["runtime_candidates"]["ordered_flows"]
+    assert seed["architecture_candidates"]["confidence"] in {"high", "medium", "low"}
+    first_component = seed["architecture_candidates"]["components"][0]
+    assert "evidence_files" in first_component
+    assert "component_edges" in first_component
+    assert first_component["confidence"] in {"high", "medium", "low"}
+    assert any(item["path"] == "server.ts" for item in seed["architecture_candidates"]["evidence_files"])
+    assert any(item["path"] == "server.ts" for item in seed["runtime_candidates"]["entrypoints"])
+    assert seed["runtime_candidates"]["ordered_flows"]
+    assert seed["runtime_candidates"]["external_dependencies"] == seed["runtime_seed"]["external_dependencies"]
+    assert "lodash" in seed["runtime_candidates"]["external_dependencies"]
+    assert any(item["path"] == "settings.json" for item in seed["runtime_candidates"]["data_artifacts"])
+    assert seed["runtime_candidates"]["confidence"] in {"high", "medium", "low"}
+    assert "file:server.ts" in seed["recommended_context"]["must_read"]
+    assert seed["recommended_context"]["optional"]
+    assert seed["recommended_context"]["recommended_tool"] == "get_context_batch"
+    assert seed["recommended_context"]["reason"]
     assert "nodes" in seed["model_shape"]
     assert "edges" in seed["model_shape"]
+
+
+def test_get_digest_returns_compact_local_static_repo_facts(tmp_path: Path) -> None:
+    (tmp_path / "server.ts").write_text(
+        "import debounce from 'lodash';\n"
+        "import { helper } from './utils';\n"
+        "export function start() {\n"
+        "  return debounce(helper, 10)();\n"
+        "}\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "utils.ts").write_text("export function helper() {\n  return 'ok';\n}\n", encoding="utf-8")
+    (tmp_path / "orphan.py").write_text("def abandoned():\n    return 1\n", encoding="utf-8")
+    mcp_server.generate_visualization(str(tmp_path), serve_viewer=False)
+
+    digest = mcp_server.get_digest(str(tmp_path))
+
+    assert digest["mode"] == "brief"
+    assert digest["source"] == "local_static_digest"
+    assert digest["llm_called_by_aksi"] is False
+    assert "local/static" in digest["guess_policy"]
+    assert digest["repo"]["name"] == tmp_path.name
+    assert digest["repo"]["purpose"]
+    assert digest["repo"]["languages"] == {"python": 1, "typescript": 2}
+    assert digest["repo"]["counts"]["files"] == 3
+    assert digest["workflow"]["next_action"] == "summarize_batch"
+    assert digest["workflow"]["next_tool"] == "get_summary_context_bundle"
+    assert digest["workflow"]["viewer_releasable"] is False
+    assert digest["workflow"]["viewer_url"] is None
+    assert digest["summary_completion"]["required"] is True
+    assert digest["model_refinement"]["architecture_required"] is True
+    assert any(item["path"] == "server.ts" for item in digest["entrypoints"])
+    assert digest["major_components"]
+    assert digest["runtime_flow_guess"]["kind"] == "local/static dependency flow guess"
+    assert "lodash" in digest["runtime_flow_guess"]["external_dependencies"]
+    assert any(item["path"] == "orphan.py" for item in digest["unused_hints"]["files"])
+    assert any(item["name"] == "abandoned" for item in digest["unused_hints"]["symbols"])
+    assert any(item["path"] == "server.ts" for item in digest["next_files_to_inspect"])
+
+
+def test_get_digest_reports_stale_files_from_saved_graph(tmp_path: Path) -> None:
+    source = tmp_path / "app.py"
+    source.write_text("def run():\n    return 1\n", encoding="utf-8")
+    mcp_server.generate_visualization(str(tmp_path), serve_viewer=False)
+
+    source.write_text("def run():\n    return 2\n", encoding="utf-8")
+    digest = mcp_server.get_digest(str(tmp_path), mode="full")
+
+    assert digest["mode"] == "full"
+    assert digest["repo"]["counts"]["stale_files"] == 1
+    assert digest["stale_files"][0]["path"] == "app.py"
+    assert any(risk["label"] == "stale_files" for risk in digest["risks"])
+    inspect_item = next(item for item in digest["next_files_to_inspect"] if item["path"] == "app.py")
+    assert "stale_on_disk" in inspect_item["local_static_reasons"]
 
 
 def test_get_workflow_status_releases_viewer_when_complete(tmp_path: Path) -> None:

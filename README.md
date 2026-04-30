@@ -11,12 +11,13 @@ Most repo-understanding tools either send code to a remote service, produce stat
 Aksi scans the repository locally, builds a visual map, and exposes precise MCP tools to the host agent.
 
 - Local scanner finds files, symbols, imports, stale files, and unused-code hints.
-- Static viewer renders Structure, Architecture, and Runtime Flow tabs.
+- Static viewer renders Structure, Architecture, and Runtime Flow tabs with search, filtering, and export affordances.
 - MCP tools let the host fetch only needed context instead of reading everything.
 - Host LLM writes summaries and refined Architecture/Runtime models from exact Aksi context.
 - Saved summaries are reused; only missing or stale nodes are refreshed later.
 
 Aksi does not call an LLM or upload code. It runs locally and writes generated files under `Files/`.
+Unused-code markers are conservative hints for review, not proof that a file or symbol can be deleted.
 
 ## Install The MCP
 
@@ -63,19 +64,24 @@ pip install -e ".[multilang]"
 Agents should use the compact workflow:
 
 ```text
+get_digest(path)
 generate_visualization(path, prepare_summary_targets=True, response_mode="compact")
 get_workflow_status(path, response_mode="compact")
 ```
 
+`get_digest` is the fast first call for agents: it should return enough repository shape, freshness, summary/model status, and next-step guidance to decide whether a full visualization workflow is needed.
+
 Then follow `next_action`:
 
 - `summarize_batch`: call `get_summary_context_bundle`, write summaries, then `save_summaries`.
-- `refine_models`: call `get_model_seed`, inspect context as needed, then save Architecture/Runtime models.
+- `refine_models`: call the stronger `get_model_seed`, inspect context as needed, then save host-refined Architecture/Runtime models.
 - `release_viewer`: share `viewer.viewer_http_url` or `viewer.viewer_url`.
 
 The viewer link is intentionally withheld until summaries and required model refinement are complete.
 
 ## Local UI
+
+The UI is a static viewer, not a chat surface. Agents work through MCP; humans inspect the generated graph, summaries, local candidates, and host-refined models in the viewer.
 
 Run directly:
 
@@ -113,6 +119,7 @@ Do not commit `Files/`.
 
 ## MCP Tools
 
+- `get_digest(...)`
 - `generate_visualization(...)`
 - `get_workflow_status(...)`
 - `get_model_seed(...)`

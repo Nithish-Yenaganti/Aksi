@@ -1,6 +1,13 @@
 from pathlib import Path
 
-from graph import build_architecture, component_id, file_id, refresh_stale_flags, write_architecture
+from graph import (
+    UNUSED_HINT_REASON,
+    build_architecture,
+    component_id,
+    file_id,
+    refresh_stale_flags,
+    write_architecture,
+)
 from scanner import scan_repo
 
 
@@ -44,14 +51,26 @@ def test_graph_marks_possibly_unused_files_and_symbols(tmp_path: Path) -> None:
     nodes = architecture["nodes"]
 
     assert nodes[file_id("used.py")]["unused"] is False
+    assert nodes[file_id("used.py")]["unused_hint"] is False
     assert nodes[file_id("orphan.py")]["unused"] is True
+    assert nodes[file_id("orphan.py")]["unused_hint"] is True
+    assert nodes[file_id("orphan.py")]["unused_confidence"] == "low"
+    assert nodes[file_id("orphan.py")]["unused_reason"] == UNUSED_HINT_REASON
     assert architecture["analysis"]["unused_files"] == 1
     assert any(
-        node["type"] == "function" and node["name"] == "abandoned" and node["unused"] is True
+        node["type"] == "function"
+        and node["name"] == "abandoned"
+        and node["unused"] is True
+        and node["unused_hint"] is True
+        and node["unused_confidence"] == "low"
+        and node["unused_reason"] == UNUSED_HINT_REASON
         for node in nodes.values()
     )
     assert any(
-        node["type"] == "function" and node["name"] == "helper" and node["unused"] is False
+        node["type"] == "function"
+        and node["name"] == "helper"
+        and node["unused"] is False
+        and node["unused_hint"] is False
         for node in nodes.values()
     )
 
@@ -96,5 +115,9 @@ def test_graph_builds_project_architecture_components(tmp_path: Path) -> None:
     assert "Source Scanner" in component_names
     assert "Static Viewer" in component_names
     assert component_id("Architecture Graph Builder") in nodes
+    assert nodes[component_id("Static Viewer")]["unused"] is True
+    assert nodes[component_id("Static Viewer")]["unused_hint"] is True
+    assert nodes[component_id("Static Viewer")]["unused_confidence"] == "low"
+    assert nodes[component_id("Static Viewer")]["unused_reason"] == UNUSED_HINT_REASON
     assert nodes[component_id("Static Viewer")]["files"] == ["ui/index.html"]
     assert any(edge["type"] == "component_dependency" for edge in architecture["component_edges"])

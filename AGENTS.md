@@ -4,17 +4,20 @@
 
 Aksi turns a local repository into a generated visual map for coding agents and humans.
 
-Aksi owns local facts: files, folders, symbols, imports, dependency edges, stale state, unused-code hints, and local Architecture/Runtime candidates. Do not ask an LLM to replace those facts.
+Aksi owns local facts: files, folders, symbols, imports, dependency edges, stale state, unused-code hints, and local Architecture/Runtime candidates. Unused-code hints are review signals, not proof of dead code. Do not ask an LLM to replace local facts.
 
 The host LLM owns language work: summaries, explanations, and final refined Architecture/Runtime models.
+
+The viewer is a static inspection surface with search, filtering, and export affordances. Do not add or depend on an in-viewer chat feature; agents interact through MCP.
 
 ## Required MCP Flow
 
 When a user asks to visualize, refresh, inspect, or explain a project through Aksi MCP:
 
-1. Call `generate_visualization(path, prepare_summary_targets=True, response_mode="compact")`.
-2. Call `get_workflow_status(path, response_mode="compact")`.
-3. Follow `next_action`.
+1. Call `get_digest(path)` first for a fast repo/status/next-step overview.
+2. Call `generate_visualization(path, prepare_summary_targets=True, response_mode="compact")`.
+3. Call `get_workflow_status(path, response_mode="compact")`.
+4. Follow `next_action`.
 
 If `next_action` is `summarize_batch`:
 
@@ -93,14 +96,17 @@ Do not copy summaries between nodes. Use low confidence when context is partial.
 
 `Structure` is the concrete local graph.
 
-`Architecture` and `Runtime Flow` start as local candidates. The host LLM may refine them only after grounding in `get_model_seed`, `get_map`, and relevant context.
+`Architecture` and `Runtime Flow` start as local candidates produced from the graph. The host LLM may refine them only after grounding in the stronger `get_model_seed`, `get_map`, and relevant context. The viewer must distinguish local candidates from host-refined models and prefer refined models only when fresh.
 
 `Runtime Flow` is not traced execution. Treat it as a static dependency/input-flow model unless source context proves more.
+
+`get_model_seed` should include enough compact local evidence for refinement: component candidates, entrypoints, dependency clusters, stale/refinement status, representative nodes, imports, and summary availability.
 
 Saved refined models include a source graph hash. If the graph changes, `model_refinement.stale_models` marks saved models stale and the host must refresh them.
 
 ## Tool Surface
 
+- `get_digest(path=".")`
 - `generate_visualization(path=".", summarize=True, prepare_summary_targets=None, serve_viewer=True, response_mode="compact|full")`
 - `get_workflow_status(path=".", limit=None, prepare_summary_targets=True, response_mode="compact|full")`
 - `get_model_seed(path=".")`
@@ -144,6 +150,7 @@ Do not commit `Files/`.
 - Keep scanning, graph building, stale detection, unused-code detection, and local Architecture/Runtime candidate detection local.
 - Keep the MCP server stdio-based.
 - Keep the viewer static.
+- Keep the viewer focused on graph inspection: search, filtering, export, summaries, and models. Do not add chat.
 - Prefer Tree-sitter or structured parsing; regex fallbacks are only for resilience.
 - Keep public command and MCP tool names stable unless the user asks for a breaking change.
 

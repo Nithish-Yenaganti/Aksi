@@ -70,6 +70,7 @@
       display: flex;
       align-items: center;
       justify-content: space-between;
+      flex-wrap: wrap;
       gap: 12px;
       pointer-events: none;
     }
@@ -102,6 +103,13 @@
       white-space: nowrap;
     }
 
+    #shareTools {
+      display: flex;
+      align-items: center;
+      gap: 4px;
+      padding: 4px;
+    }
+
     #meta {
       position: fixed;
       left: 12px;
@@ -125,7 +133,8 @@
       padding: 4px;
     }
 
-    #viewModes button {
+    #viewModes button,
+    #shareTools button {
       appearance: none;
       border: 1px solid transparent;
       border-radius: 0;
@@ -137,10 +146,88 @@
       padding: 6px 9px;
     }
 
+    #shareTools button {
+      white-space: nowrap;
+    }
+
     #viewModes button.active {
       border-color: rgba(240, 250, 255, 0.72);
       background: rgba(237, 249, 255, 0.12);
       color: var(--ink);
+    }
+
+    #shareTools button:hover:not(:disabled),
+    #shareTools button:focus-visible {
+      border-color: rgba(240, 250, 255, 0.72);
+      background: rgba(237, 249, 255, 0.12);
+      color: var(--ink);
+      outline: none;
+    }
+
+    #shareTools button:disabled {
+      cursor: not-allowed;
+      opacity: 0.45;
+    }
+
+    #exploreControls {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      min-width: min(520px, 38vw);
+    }
+
+    #searchBox {
+      width: min(240px, 18vw);
+      min-width: 150px;
+      border: 1px solid rgba(240, 250, 255, 0.42);
+      border-radius: 0;
+      background: rgba(3, 47, 85, 0.54);
+      color: var(--ink);
+      font: inherit;
+      font-size: 12px;
+      outline: none;
+      padding: 6px 8px;
+    }
+
+    #searchBox::placeholder {
+      color: rgba(185, 220, 235, 0.78);
+    }
+
+    #searchBox:focus {
+      border-color: rgba(240, 250, 255, 0.82);
+      box-shadow: inset 0 0 0 1px rgba(240, 250, 255, 0.14);
+    }
+
+    #statusFilters {
+      display: flex;
+      flex: 0 0 auto;
+      gap: 4px;
+    }
+
+    #statusFilters button {
+      appearance: none;
+      border: 1px solid transparent;
+      border-radius: 0;
+      background: transparent;
+      color: var(--muted);
+      cursor: pointer;
+      font: inherit;
+      font-size: 11px;
+      padding: 6px 7px;
+      white-space: nowrap;
+    }
+
+    #statusFilters button.active {
+      border-color: rgba(240, 250, 255, 0.72);
+      background: rgba(237, 249, 255, 0.12);
+      color: var(--ink);
+    }
+
+    #filterStatus {
+      flex: 0 0 auto;
+      color: var(--muted);
+      font-size: 11px;
+      white-space: nowrap;
     }
 
     #details {
@@ -246,6 +333,9 @@
     }
     .node.selected rect { stroke: #ffffff; stroke-width: 3; }
     .node.connected rect { stroke: #d2ecf2; stroke-width: 2.5; }
+    .node.dimmed {
+      opacity: 0.22;
+    }
 
     .label {
       fill: var(--ink);
@@ -290,6 +380,10 @@
       stroke-opacity: 0.95;
     }
 
+    .edge.dimmed {
+      stroke-opacity: 0.14;
+    }
+
     body[data-view="structure"] .import-edges { display: none; }
     body[data-view="architecture"] .hierarchy-edges { display: none; }
     body[data-view="architecture"] .edge.import { stroke-opacity: 0.82; stroke-width: 2.2; }
@@ -304,6 +398,21 @@
       <button type="button" data-view="structure" class="active">Structure</button>
       <button type="button" data-view="architecture">Architecture</button>
       <button type="button" data-view="runtime">Runtime Flow</button>
+    </div>
+    <div id="exploreControls" aria-label="Search and filter nodes">
+      <input id="searchBox" type="search" autocomplete="off" spellcheck="false" placeholder="Search nodes">
+      <div id="statusFilters" aria-label="Status filter">
+        <button type="button" data-filter="all" class="active">All</button>
+        <button type="button" data-filter="stale">Stale</button>
+        <button type="button" data-filter="unused">Unused</button>
+        <button type="button" data-filter="missing">Missing summaries</button>
+      </div>
+      <span id="filterStatus" aria-live="polite"></span>
+    </div>
+    <div id="shareTools" aria-label="Export and share tools">
+      <button type="button" id="exportSvg">Export SVG</button>
+      <button type="button" id="exportPng">Export PNG</button>
+      <button type="button" id="copySummary" disabled>Copy Summary</button>
     </div>
     <div id="repoName">Loading repo</div>
   </div>
@@ -335,6 +444,12 @@
     const repoName = document.querySelector("#repoName");
     const details = document.querySelector("#details");
     const modeButtons = Array.from(document.querySelectorAll("#viewModes button"));
+    const searchBox = document.querySelector("#searchBox");
+    const filterButtons = Array.from(document.querySelectorAll("#statusFilters button"));
+    const filterStatus = document.querySelector("#filterStatus");
+    const exportSvgButton = document.querySelector("#exportSvg");
+    const exportPngButton = document.querySelector("#exportPng");
+    const copySummaryButton = document.querySelector("#copySummary");
 
     const width = () => window.innerWidth;
     const height = () => window.innerHeight;
@@ -344,8 +459,10 @@
     let currentView = "structure";
     let currentDiagramEdges = [];
     let selectedNodeId = null;
+    let selectedSummaryText = "";
     let summaryIndex = {};
     let refinedModels = {};
+    let filterState = { query: "", status: "all" };
     document.body.dataset.view = currentView;
 
     function nodeArray(graph) {
@@ -455,6 +572,74 @@
       return { ...direct, ...parsed };
     }
 
+    function savedSummaryText(node) {
+      const saved = summaryIndex[node.id];
+      if (!saved || !saved.summary) return "";
+      const normalized = normalizeSavedSummary(saved.summary);
+      return [
+        summaryValue(saved.summary),
+        ...Object.values(normalized).map(summaryValue),
+      ].filter(Boolean).join(" ");
+    }
+
+    function nodeSearchText(node) {
+      return [
+        node.name,
+        node.path,
+        node.type,
+        node.language,
+        savedSummaryText(node),
+      ].filter(Boolean).join(" ").toLowerCase();
+    }
+
+    function matchesStatusFilter(node) {
+      const saved = summaryIndex[node.id];
+      if (filterState.status === "stale") return Boolean(node.stale || saved?.stale);
+      if (filterState.status === "unused") return Boolean(node.unused);
+      if (filterState.status === "missing") return !saved?.summary;
+      return true;
+    }
+
+    function matchesSearch(node) {
+      const terms = filterState.query.toLowerCase().trim().split(/\s+/).filter(Boolean);
+      if (!terms.length) return true;
+      const haystack = nodeSearchText(node);
+      return terms.every(term => haystack.includes(term));
+    }
+
+    function nodeMatchesFilter(node) {
+      return matchesStatusFilter(node) && matchesSearch(node);
+    }
+
+    function edgeEndpointId(endpoint) {
+      return endpoint?.data?.id || endpoint;
+    }
+
+    function applyNodeFilters() {
+      const allNodes = nodeLayer.selectAll("g.node");
+      const matchedIds = new Set();
+      let total = 0;
+      let matched = 0;
+
+      allNodes.each(item => {
+        const data = item.data;
+        total += 1;
+        if (nodeMatchesFilter(data)) {
+          matched += 1;
+          matchedIds.add(data.id);
+        }
+      });
+
+      allNodes.classed("dimmed", item => !matchedIds.has(item.data.id));
+      importEdgeLayer.selectAll("path.edge")
+        .classed("dimmed", edge => !matchedIds.has(edge.source) || !matchedIds.has(edge.target));
+      hierarchyEdgeLayer.selectAll("path.edge")
+        .classed("dimmed", edge => !matchedIds.has(edgeEndpointId(edge.source)) || !matchedIds.has(edgeEndpointId(edge.target)));
+
+      const active = filterState.query.trim() || filterState.status !== "all";
+      filterStatus.textContent = active && total ? `${matched}/${total}` : "";
+    }
+
     function summarySection(title, value, fallback = "Not specified.") {
       return [
         `<section class="summary-section">`,
@@ -462,6 +647,196 @@
         `<p>${escapeHtml(value || fallback)}</p>`,
         `</section>`,
       ].join("");
+    }
+
+    function summaryLine(title, value, fallback = "Not specified.") {
+      return `${title}: ${summaryValue(value) || fallback}`;
+    }
+
+    function detailSummaryText(node, metaText, summary, edges, outgoing, incoming) {
+      return [
+        `Aksi Summary - ${node.name}`,
+        summaryLine("View", currentView),
+        summaryLine("Metadata", metaText, "No metadata."),
+        summaryLine("Source", summary.source, "Unknown source."),
+        "",
+        summaryLine("Purpose", summary.purpose || summary.summary || summary.what),
+        summaryLine("Behavior", summary.behavior || summary.how_it_works || summary.how),
+        summaryLine("Interfaces", summary.interfaces),
+        summaryLine("Dependencies", summary.dependencies || summary.relationships || summary.role),
+        summaryLine("Used By", summary.used_by),
+        summaryLine("Change Risk", summary.change_risk, "unknown"),
+        summaryLine("Open Questions", summary.open_questions, "None recorded."),
+        summaryLine("Confidence", summary.confidence, "unknown"),
+        "",
+        `${edges.length} connected edge${edges.length === 1 ? "" : "s"}; ${outgoing.length} out; ${incoming.length} in`,
+      ].join("\n");
+    }
+
+    function updateShareControls() {
+      copySummaryButton.disabled = !selectedSummaryText;
+    }
+
+    function downloadBlob(blob, filename) {
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = filename;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      window.setTimeout(() => URL.revokeObjectURL(url), 1200);
+    }
+
+    function exportFilename(extension) {
+      const rootNode = currentGraph?.nodes?.[currentGraph.root];
+      const base = (rootNode?.name || "aksi-blueprint")
+        .toLowerCase()
+        .replace(/[^a-z0-9]+/g, "-")
+        .replace(/^-+|-+$/g, "") || "aksi-blueprint";
+      return `${base}-${currentView}.${extension}`;
+    }
+
+    function exportSvgStyles() {
+      return `
+        :root {
+          --paper-line: rgba(240, 250, 255, 0.84);
+          --ink: #edf9ff;
+          --muted: #b9dceb;
+          --line: rgba(240, 250, 255, 0.78);
+          --stale: #f6d46b;
+          --unused: #ff8f7d;
+          --file: rgba(5, 76, 126, 0.88);
+          --folder: rgba(7, 91, 150, 0.9);
+          --symbol: rgba(4, 57, 98, 0.92);
+          --external: rgba(3, 47, 85, 0.86);
+        }
+        .node rect {
+          stroke: var(--paper-line);
+          stroke-width: 1.35;
+          fill-opacity: 0.82;
+          filter: drop-shadow(0 0 2px rgba(240, 250, 255, 0.32));
+        }
+        .node.repo rect { fill: rgba(7, 91, 150, 0.7); stroke: #f0faff; stroke-width: 2; }
+        .node.folder rect { fill: var(--folder); }
+        .node.file rect { fill: var(--file); }
+        .node.function rect,
+        .node.class rect,
+        .node.interface rect,
+        .node.struct rect,
+        .node.type rect { fill: var(--symbol); }
+        .node.external rect { fill: var(--external); stroke-dasharray: 4 3; }
+        .node.component rect { fill: rgba(8, 100, 161, 0.72); stroke: #f0faff; }
+        .node.input rect { fill: rgba(7, 91, 150, 0.74); stroke: #f0faff; }
+        .node.process rect { fill: rgba(4, 63, 109, 0.8); stroke: #d8f2fa; }
+        .node.artifact rect { fill: rgba(8, 100, 161, 0.72); stroke: #f0faff; }
+        .node.consumer rect { fill: rgba(11, 113, 177, 0.72); stroke: #f0faff; }
+        .node.stale rect { stroke: var(--stale); stroke-width: 2.5; }
+        .node.unused rect { stroke: var(--unused); stroke-width: 2.8; stroke-dasharray: 8 4; fill: rgba(92, 38, 44, 0.76); }
+        .node.selected rect { stroke: #ffffff; stroke-width: 3; }
+        .node.connected rect { stroke: #d2ecf2; stroke-width: 2.5; }
+        .node.dimmed { opacity: 0.22; }
+        .label {
+          fill: var(--ink);
+          pointer-events: none;
+          text-anchor: middle;
+          font-family: "Courier New", ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+          font-size: 15px;
+          font-weight: 700;
+          letter-spacing: 0.02em;
+        }
+        .kind-label {
+          fill: var(--muted);
+          font-size: 10px;
+          font-weight: 700;
+          letter-spacing: 0.08em;
+          text-transform: uppercase;
+        }
+        .name-label { dominant-baseline: middle; }
+        .edge {
+          fill: none;
+          stroke: var(--line);
+          stroke-width: 1.35;
+          stroke-opacity: 0.72;
+          pointer-events: none;
+        }
+        .edge.hierarchy { stroke: #f0faff; stroke-opacity: 0.62; stroke-width: 1.5; }
+        .edge.import { marker-end: url(#arrow-flow); stroke: #f0faff; stroke-opacity: 0.58; stroke-width: 1.5; }
+        .edge.active { stroke: #ffffff; stroke-width: 3; stroke-opacity: 0.95; }
+        .edge.dimmed { stroke-opacity: 0.14; }
+      `;
+    }
+
+    function serializedCurrentSvg() {
+      const source = document.querySelector("#canvas");
+      const clone = source.cloneNode(true);
+      const canvasWidth = width();
+      const canvasHeight = height();
+      clone.setAttribute("xmlns", "http://www.w3.org/2000/svg");
+      clone.setAttribute("width", String(canvasWidth));
+      clone.setAttribute("height", String(canvasHeight));
+      clone.setAttribute("viewBox", `0 0 ${canvasWidth} ${canvasHeight}`);
+
+      const style = document.createElementNS("http://www.w3.org/2000/svg", "style");
+      style.textContent = exportSvgStyles();
+      clone.insertBefore(style, clone.firstChild);
+
+      const background = document.createElementNS("http://www.w3.org/2000/svg", "rect");
+      background.setAttribute("x", "0");
+      background.setAttribute("y", "0");
+      background.setAttribute("width", String(canvasWidth));
+      background.setAttribute("height", String(canvasHeight));
+      background.setAttribute("fill", "#064f85");
+      clone.insertBefore(background, style.nextSibling);
+
+      return new XMLSerializer().serializeToString(clone);
+    }
+
+    function exportCurrentSvg() {
+      const payload = serializedCurrentSvg();
+      downloadBlob(new Blob([payload], { type: "image/svg+xml;charset=utf-8" }), exportFilename("svg"));
+    }
+
+    function exportCurrentPng() {
+      const payload = serializedCurrentSvg();
+      const blob = new Blob([payload], { type: "image/svg+xml;charset=utf-8" });
+      const url = URL.createObjectURL(blob);
+      const image = new Image();
+      image.onload = () => {
+        const canvas = document.createElement("canvas");
+        canvas.width = width();
+        canvas.height = height();
+        const context = canvas.getContext("2d");
+        context.drawImage(image, 0, 0);
+        URL.revokeObjectURL(url);
+        canvas.toBlob(pngBlob => {
+          if (pngBlob) downloadBlob(pngBlob, exportFilename("png"));
+        }, "image/png");
+      };
+      image.onerror = () => URL.revokeObjectURL(url);
+      image.src = url;
+    }
+
+    async function copySelectedSummary() {
+      if (!selectedSummaryText) return;
+      try {
+        await navigator.clipboard.writeText(selectedSummaryText);
+      } catch (_error) {
+        const field = document.createElement("textarea");
+        field.value = selectedSummaryText;
+        field.setAttribute("readonly", "");
+        field.style.position = "fixed";
+        field.style.left = "-9999px";
+        document.body.appendChild(field);
+        field.select();
+        document.execCommand("copy");
+        field.remove();
+      }
+      const original = copySummaryButton.textContent;
+      copySummaryButton.textContent = "Copied";
+      window.setTimeout(() => {
+        copySummaryButton.textContent = original;
+      }, 1200);
     }
 
     function splitLongWord(word, limit) {
@@ -982,6 +1357,8 @@
         node.unused ? "possibly unused" : "",
         node.path,
       ].filter(Boolean).join(" · ");
+      selectedSummaryText = detailSummaryText(node, meta, summary, edges, outgoing, incoming);
+      updateShareControls();
 
       details.classList.add("open");
       details.innerHTML = [
@@ -1273,13 +1650,12 @@
       repoName.textContent = rootNode?.name ? `Repo: ${rootNode.name}` : "Repo: unknown";
       if (currentView === "architecture") {
         renderArchitecture(graph);
-        return;
-      }
-      if (currentView === "runtime") {
+      } else if (currentView === "runtime") {
         renderRuntimeFlow(graph);
-        return;
+      } else {
+        renderStructure(graph);
       }
-      renderStructure(graph);
+      applyNodeFilters();
     }
 
     function setViewMode(mode) {
@@ -1322,6 +1698,8 @@
           }
         });
       } else {
+        selectedSummaryText = "";
+        updateShareControls();
         details.classList.remove("open");
         details.innerHTML = "";
       }
@@ -1339,6 +1717,25 @@
     modeButtons.forEach(button => {
       button.addEventListener("click", () => setViewMode(button.dataset.view));
     });
+    exportSvgButton.addEventListener("click", exportCurrentSvg);
+    exportPngButton.addEventListener("click", exportCurrentPng);
+    copySummaryButton.addEventListener("click", copySelectedSummary);
+    updateShareControls();
+
+    searchBox.addEventListener("input", () => {
+      filterState.query = searchBox.value;
+      applyNodeFilters();
+    });
+
+    filterButtons.forEach(button => {
+      button.addEventListener("click", () => {
+        filterState.status = button.dataset.filter;
+        filterButtons.forEach(item => {
+          item.classList.toggle("active", item === button);
+        });
+        applyNodeFilters();
+      });
+    });
 
     function summaryIndexUrl() {
       return window.__AKSI_ARCHITECTURE__ ? "context/index.json" : "../Files/context/index.json";
@@ -1351,6 +1748,7 @@
     async function refreshSummaries() {
       if (window.location.protocol === "file:" && window.__AKSI_SUMMARIES__) {
         summaryIndex = window.__AKSI_SUMMARIES__.summaries || {};
+        applyNodeFilters();
         return true;
       }
       try {
@@ -1358,6 +1756,7 @@
         if (!response.ok) return false;
         const payload = await response.json();
         summaryIndex = payload?.summaries || {};
+        applyNodeFilters();
         return true;
       } catch (_error) {
         return false;
