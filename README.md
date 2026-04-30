@@ -1,17 +1,55 @@
 # Aksi
 
-Aksi is a local-first codebase visualization and MCP context tool. It scans a repository, builds a static blueprint of files/symbols/imports, writes a browser viewer under `Files/`, and gives MCP-capable coding agents precise context tools.
+## The Problem
 
-Aksi does not call an LLM. The scanner and graph builder run locally. The connected host LLM writes summaries and refined Architecture/Runtime models from Aksi-provided context.
+Coding agents waste time and tokens rereading whole repositories. Humans also need a fast way to see what a codebase contains, what depends on what, what changed, and which parts need explanation.
 
-## Install
+Most repo-understanding tools either send code to a remote service, produce static docs that go stale, or make the LLM guess architecture from partial context.
 
-For development from this repo:
+## How Aksi Solves It
+
+Aksi scans the repository locally, builds a visual map, and exposes precise MCP tools to the host agent.
+
+- Local scanner finds files, symbols, imports, stale files, and unused-code hints.
+- Static viewer renders Structure, Architecture, and Runtime Flow tabs.
+- MCP tools let the host fetch only needed context instead of reading everything.
+- Host LLM writes summaries and refined Architecture/Runtime models from exact Aksi context.
+- Saved summaries are reused; only missing or stale nodes are refreshed later.
+
+Aksi does not call an LLM or upload code. It runs locally and writes generated files under `Files/`.
+
+## Install The MCP
+
+From this repo:
 
 ```bash
 python -m venv .venv
 . .venv/bin/activate
 pip install -e ".[dev]"
+```
+
+Generate a local MCP config snippet:
+
+```bash
+scripts/setup_mcp.sh --write-config .mcp/aksi.json
+```
+
+For Claude Desktop on macOS:
+
+```bash
+scripts/setup_mcp.sh --claude-desktop
+```
+
+Manual MCP command:
+
+```bash
+python mcp_server.py
+```
+
+Installed command:
+
+```bash
+aksi-mcp
 ```
 
 Optional multi-language grammar bundle:
@@ -20,28 +58,38 @@ Optional multi-language grammar bundle:
 pip install -e ".[multilang]"
 ```
 
-Installed commands:
+## Agent Workflow
 
-```bash
-aksi
-aksi-mcp
+Agents should use the compact workflow:
+
+```text
+generate_visualization(path, prepare_summary_targets=True, response_mode="compact")
+get_workflow_status(path, response_mode="compact")
 ```
 
-## Local Use
+Then follow `next_action`:
 
-Scan and serve the current repository:
+- `summarize_batch`: call `get_summary_context_bundle`, write summaries, then `save_summaries`.
+- `refine_models`: call `get_model_seed`, inspect context as needed, then save Architecture/Runtime models.
+- `release_viewer`: share `viewer.viewer_http_url` or `viewer.viewer_url`.
+
+The viewer link is intentionally withheld until summaries and required model refinement are complete.
+
+## Local UI
+
+Run directly:
 
 ```bash
 python aksi.py
 ```
 
-Equivalent installed command:
+Installed command:
 
 ```bash
 aksi
 ```
 
-Useful variants:
+Useful options:
 
 ```bash
 python aksi.py --scan-only
@@ -50,7 +98,7 @@ python aksi.py --test
 python aksi.py /path/to/repo --port 8080
 ```
 
-Aksi writes generated output into the scanned repo:
+Generated output:
 
 ```text
 Files/architecture.json
@@ -61,131 +109,53 @@ Files/context/*.json
 Files/context/models.json
 ```
 
-`Files/` is generated output and should stay ignored by git.
-
-## MCP Setup
-
-Run the stdio MCP server directly:
-
-```bash
-python mcp_server.py
-```
-
-Equivalent installed command:
-
-```bash
-aksi-mcp
-```
-
-Generate a client config snippet:
-
-```bash
-scripts/setup_mcp.sh
-scripts/setup_mcp.sh --write-config .mcp/aksi.json
-scripts/setup_mcp.sh --claude-desktop
-```
+Do not commit `Files/`.
 
 ## MCP Tools
 
-- `generate_visualization(path=".", summarize=True, prepare_summary_targets=None, serve_viewer=True, response_mode="full")`
-- `get_workflow_status(path=".", limit=None, prepare_summary_targets=True, response_mode="full")`
-- `get_model_seed(path=".")`
-- `scan_repo(path=".")`
-- `get_map(path=".")`
-- `get_summary_worklist(path=".")`
-- `get_context(node_id, path=".")`
-- `get_context_batch(node_ids=None, path=".", limit=None, include_source=True)`
-- `get_summary_context_bundle(path=".", limit=None, include_source=True)`
-- `save_summary(node_id, summary, path=".")`
-- `save_summaries(items, path=".")`
-- `get_summary(node_id, path=".")`
-- `list_summaries(path=".")`
-- `save_architecture_model(model, path=".")`
-- `save_runtime_model(model, path=".")`
-- `get_models(path=".")`
-- `stop_viewer(path=".")`
+- `generate_visualization(...)`
+- `get_workflow_status(...)`
+- `get_model_seed(...)`
+- `get_summary_worklist(...)`
+- `get_context(...)`
+- `get_context_batch(...)`
+- `get_summary_context_bundle(...)`
+- `save_summary(...)`
+- `save_summaries(...)`
+- `save_architecture_model(...)`
+- `save_runtime_model(...)`
+- `get_map(...)`
+- `get_summary(...)`
+- `list_summaries(...)`
+- `get_models(...)`
+- `stop_viewer(...)`
+- `scan_repo(...)`
 
-Use `response_mode="compact"` for normal agent loops. Compact mode returns counts, file paths, release state, next action, and a recommended batch without large worklist/schema payloads.
+Use `response_mode="compact"` for normal agent loops. Use full responses only when complete target/worklist/schema payloads are needed.
 
-## Expected MCP Workflow
+## Deployment
+
+The recommended public distribution is a Python package, not a hosted scanner. Aksi needs direct filesystem access to the user's repo, so the MCP server should run beside the codebase through `aksi-mcp`.
+
+For easy install:
+
+```bash
+pipx install aksi
+```
+
+or:
+
+```bash
+uv tool install aksi
+```
+
+Then users configure their MCP client to run:
 
 ```text
-generate_visualization(path, prepare_summary_targets=True, response_mode="compact")
-get_workflow_status(path, response_mode="compact")
+command: aksi-mcp
 ```
 
-Then follow `next_action`:
-
-`summarize_batch`
-
-```text
-get_summary_context_bundle(path, limit=...)
-host writes and verifies summaries from returned context
-save_summaries(items, path)
-get_workflow_status(path, response_mode="compact")
-```
-
-`refine_models`
-
-```text
-get_model_seed(path)
-get_map(path) and get_context/get_context_batch as needed
-host writes grounded Architecture and Runtime models
-save_architecture_model(model, path)
-save_runtime_model(model, path)
-get_workflow_status(path, response_mode="compact")
-```
-
-`release_viewer`
-
-```text
-share viewer.viewer_http_url when present, otherwise viewer.viewer_url
-```
-
-The viewer URL is withheld until summaries are current and required model refinement is current. A graph-only preview should be shared only when the user explicitly asks to skip the full workflow.
-
-## Summary Rules
-
-`summarize=True` and `prepare_summary_targets=True` prepare host work items. They do not write summaries.
-
-The host should summarize only missing or stale worklist items. Fresh summaries are preserved and reused.
-
-Preferred summary shape:
-
-```json
-{
-  "purpose": "What this node is for in one sentence.",
-  "behavior": "What it actually does, grounded in get_context output.",
-  "interfaces": "Important functions, classes, inputs, outputs, commands, or MCP tools exposed here.",
-  "dependencies": "Key upstream/downstream files, modules, services, or data it relies on.",
-  "used_by": "Known callers, views, workflows, or project areas that depend on it.",
-  "change_risk": "low, medium, or high, with the reason a future agent should care.",
-  "open_questions": "Important unknowns or cases where the source should be reopened.",
-  "confidence": "high, medium, or low based on how complete the returned context was."
-}
-```
-
-## Viewer
-
-The source template is:
-
-```text
-ui/index.html
-```
-
-The generated viewer is:
-
-```text
-Files/index.html
-```
-
-The viewer has three tabs:
-
-- `Structure`: repo, folders, files, and symbols from local scanning.
-- `Architecture`: host-refined model when available, otherwise local component candidates.
-- `Runtime Flow`: host-refined runtime/input-flow model when available, otherwise static dependency-flow candidates.
-
-Clicking a rectangle opens a detail panel using saved summaries first, then refined model data, then local fallback text.
+For a cloud product, use a hybrid design: keep the scanner/MCP worker local or inside the user's own development container, and host only documentation, package downloads, release metadata, and optional static viewer hosting. Do not send private repositories to a central Aksi server unless the user explicitly opts into that architecture.
 
 ## Development
 
@@ -196,12 +166,8 @@ Run checks:
 .venv/bin/python -m pytest
 ```
 
-Build/package notes:
+Packaging notes:
 
-- `pyproject.toml` defines `aksi` and `aksi-mcp` console commands.
+- `pyproject.toml` defines `aksi` and `aksi-mcp`.
 - The viewer template is packaged as `share/aksi/ui/index.html`.
-- `mcp_server.py` can load the viewer template from either the repo checkout or installed package data.
-
-## Privacy
-
-Aksi scans local files and writes local generated artifacts. It does not upload code and does not call external LLM APIs.
+- `mcp_server.py` can load the viewer from either repo checkout or installed package data.
