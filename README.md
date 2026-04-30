@@ -66,6 +66,12 @@ This writes:
 python mcp_server.py
 ```
 
+After installing Aksi as a package, the same server is available as:
+
+```bash
+aksi-mcp
+```
+
 To set up the local venv and generate a client-ready MCP config snippet:
 
 ```bash
@@ -199,6 +205,12 @@ The one-command runner already scans and serves the UI:
 
 ```bash
 python aksi.py
+```
+
+After package installation, you can also run:
+
+```bash
+aksi
 ```
 
 For manual static serving after a scan, serve the repository directory and open the UI:

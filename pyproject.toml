@@ -1,3 +1,7 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
 [project]
 name = "aksi"
 version = "0.1.0"
@@ -17,8 +21,15 @@ multilang = [
   "tree-sitter-languages>=1.10; python_version < '3.14'",
 ]
 
+[project.scripts]
+aksi = "aksi:main"
+aksi-mcp = "mcp_server:main"
+
 [tool.setuptools]
 py-modules = ["aksi", "scanner", "graph", "mcp_server"]
+
+[tool.setuptools.data-files]
+"share/aksi/ui" = ["ui/index.html"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

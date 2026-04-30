@@ -130,7 +130,6 @@ Main files:
 - `aksi.py`: one-command local runner that generates and serves `Files/index.html`.
 - `ui/index.html`: static viewer template copied into generated output.
 - `tests/`: coverage for scanner, graph, MCP behavior, and summary persistence.
-
 Before finishing implementation work, run:
 
 ```bash

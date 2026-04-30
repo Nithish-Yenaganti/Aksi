@@ -49,18 +49,6 @@
       font: 16px/1.35 "Courier New", ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
     }
 
-    body::before {
-      content: "";
-      position: fixed;
-      inset: 24px;
-      z-index: 0;
-      pointer-events: none;
-      border: 2px solid rgba(240, 250, 255, 0.72);
-      box-shadow:
-        inset 0 0 0 1px rgba(240, 250, 255, 0.2),
-        0 0 44px rgba(3, 47, 85, 0.5);
-    }
-
     body::after {
       content: "";
       position: fixed;
@@ -178,10 +166,12 @@
     #details h2 {
       margin: 0 0 6px;
       font-size: 14px;
+      line-height: 1.25;
+      overflow-wrap: anywhere;
     }
 
     #details h3 {
-      margin: 12px 0 4px;
+      margin: 0 0 5px;
       color: var(--ink);
       font-size: 11px;
       letter-spacing: 0;
@@ -192,6 +182,29 @@
       margin: 4px 0;
       color: var(--muted);
       overflow-wrap: anywhere;
+      white-space: pre-wrap;
+    }
+
+    .summary-section {
+      margin-top: 12px;
+      padding-top: 10px;
+      border-top: 1px solid rgba(240, 250, 255, 0.18);
+    }
+
+    .summary-section p {
+      font-size: 13px;
+      line-height: 1.42;
+    }
+
+    .summary-meta {
+      font-size: 12px;
+      line-height: 1.35;
+    }
+
+    .summary-foot {
+      margin-top: 12px;
+      color: var(--muted);
+      font-size: 12px;
     }
 
     svg {
@@ -362,6 +375,93 @@
         .replaceAll(">", "&gt;")
         .replaceAll('"', "&quot;")
         .replaceAll("'", "&#039;");
+    }
+
+    const summaryFields = [
+      ["purpose", ["purpose", "what", "summary"]],
+      ["behavior", ["behavior", "how_it_works", "how"]],
+      ["interfaces", ["interfaces"]],
+      ["dependencies", ["dependencies", "relationships"]],
+      ["used_by", ["used_by", "used by", "role"]],
+      ["change_risk", ["change_risk", "change risk"]],
+      ["open_questions", ["open_questions", "open questions"]],
+      ["confidence", ["confidence"]],
+    ];
+
+    function summaryValue(value) {
+      if (value == null || value === "") return "";
+      if (Array.isArray(value)) return value.map(summaryValue).filter(Boolean).join("\n");
+      if (typeof value === "object") return JSON.stringify(value, null, 2);
+      return String(value).trim();
+    }
+
+    function parseLabeledSummaryText(text) {
+      const source = String(text || "").trim();
+      if (!source) return {};
+      const labelMap = new Map();
+      summaryFields.forEach(([field, aliases]) => aliases.forEach(alias => {
+        labelMap.set(alias.toLowerCase(), field);
+      }));
+      const labels = Array.from(labelMap.keys())
+        .sort((a, b) => b.length - a.length)
+        .map(label => label.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"));
+      const pattern = new RegExp(`\\b(${labels.join("|")})\\s*:`, "gi");
+      const matches = [...source.matchAll(pattern)];
+      if (matches.length < 2 && !(matches.length === 1 && matches[0].index === 0)) {
+        return {};
+      }
+      const parsed = {};
+      matches.forEach((match, index) => {
+        const label = match[1].toLowerCase();
+        const field = labelMap.get(label);
+        const start = (match.index || 0) + match[0].length;
+        const end = index + 1 < matches.length ? matches[index + 1].index : source.length;
+        const value = source.slice(start, end).trim().replace(/[.;,\s]+$/, "");
+        if (field && value) parsed[field] = value;
+      });
+      return parsed;
+    }
+
+    function firstSummaryField(summary, aliases) {
+      for (const alias of aliases) {
+        if (summary && Object.prototype.hasOwnProperty.call(summary, alias)) {
+          const value = summaryValue(summary[alias]);
+          if (value) return value;
+        }
+      }
+      return "";
+    }
+
+    function normalizeSavedSummary(summary) {
+      if (typeof summary === "string") {
+        const parsed = parseLabeledSummaryText(summary);
+        return Object.keys(parsed).length
+          ? parsed
+          : { purpose: summary };
+      }
+      if (!summary || typeof summary !== "object") return {};
+
+      const direct = {};
+      summaryFields.forEach(([field, aliases]) => {
+        const value = firstSummaryField(summary, aliases);
+        if (value) direct[field] = value;
+      });
+
+      const combinedText = Object.values(summary)
+        .map(summaryValue)
+        .filter(Boolean)
+        .join(" ");
+      const parsed = parseLabeledSummaryText(combinedText);
+      return { ...direct, ...parsed };
+    }
+
+    function summarySection(title, value, fallback = "Not specified.") {
+      return [
+        `<section class="summary-section">`,
+        `<h3>${escapeHtml(title)}</h3>`,
+        `<p>${escapeHtml(value || fallback)}</p>`,
+        `</section>`,
+      ].join("");
     }
 
     function splitLongWord(word, limit) {
@@ -827,26 +927,13 @@
     function nodeSummary(node, incoming, outgoing) {
       const saved = summaryIndex[node.id];
       if (saved && saved.summary) {
-        const summary = saved.summary;
-        if (typeof summary === "string") {
-          return {
-            purpose: summary,
-            behavior: saved.stale ? "This saved LLM summary may be stale because the source file changed." : "This was saved by the LLM host for reuse.",
-            interfaces: "Unknown from string-only summary.",
-            dependencies: "Unknown from string-only summary.",
-            used_by: "Cached context for future questions about this rectangle.",
-            change_risk: "unknown",
-            open_questions: "Open source with get_context if this node is directly relevant to the task.",
-            confidence: "unknown",
-            source: saved.stale ? "Saved LLM summary (stale)" : "Saved LLM summary",
-          };
-        }
+        const summary = normalizeSavedSummary(saved.summary);
         return {
-          purpose: summary.purpose || summary.summary || summary.what || "Saved LLM summary is available for this rectangle.",
-          behavior: summary.behavior || summary.how_it_works || summary.how || "The LLM host produced this after reading exact code through Aksi MCP get_context.",
+          purpose: summary.purpose || "Saved LLM summary is available for this rectangle.",
+          behavior: summary.behavior || (saved.stale ? "This saved LLM summary may be stale because the source file changed." : "The LLM host produced this after reading exact code through Aksi MCP get_context."),
           interfaces: summary.interfaces || "Not specified in saved summary.",
-          dependencies: summary.dependencies || summary.relationships || "Not specified in saved summary.",
-          used_by: summary.used_by || summary.role || "Cached explanation for future LLM and user context.",
+          dependencies: summary.dependencies || "Not specified in saved summary.",
+          used_by: summary.used_by || "Cached explanation for future LLM and user context.",
           change_risk: summary.change_risk || "unknown",
           open_questions: summary.open_questions || "None recorded.",
           confidence: summary.confidence || "unknown",
@@ -899,25 +986,17 @@
       details.classList.add("open");
       details.innerHTML = [
         `<h2>${escapeHtml(node.name)}</h2>`,
-        `<p>${escapeHtml(meta)}</p>`,
-        `<p>${escapeHtml(summary.source)}</p>`,
-        "<h3>Purpose</h3>",
-        `<p>${escapeHtml(summary.purpose || summary.summary || summary.what)}</p>`,
-        "<h3>Behavior</h3>",
-        `<p>${escapeHtml(summary.behavior || summary.how_it_works || summary.how)}</p>`,
-        "<h3>Interfaces</h3>",
-        `<p>${escapeHtml(summary.interfaces || "Not specified.")}</p>`,
-        "<h3>Dependencies</h3>",
-        `<p>${escapeHtml(summary.dependencies || summary.relationships || summary.role || "Not specified.")}</p>`,
-        "<h3>Used By</h3>",
-        `<p>${escapeHtml(summary.used_by || "Not specified.")}</p>`,
-        "<h3>Change Risk</h3>",
-        `<p>${escapeHtml(summary.change_risk || "unknown")}</p>`,
-        "<h3>Open Questions</h3>",
-        `<p>${escapeHtml(summary.open_questions || "None recorded.")}</p>`,
-        "<h3>Confidence</h3>",
-        `<p>${escapeHtml(summary.confidence || "unknown")}</p>`,
-        `<p>${edges.length} connected edge${edges.length === 1 ? "" : "s"} · ${outgoing.length} out · ${incoming.length} in</p>`,
+        `<p class="summary-meta">${escapeHtml(meta)}</p>`,
+        `<p class="summary-meta">${escapeHtml(summary.source)}</p>`,
+        summarySection("Purpose", summary.purpose || summary.summary || summary.what),
+        summarySection("Behavior", summary.behavior || summary.how_it_works || summary.how),
+        summarySection("Interfaces", summary.interfaces),
+        summarySection("Dependencies", summary.dependencies || summary.relationships || summary.role),
+        summarySection("Used By", summary.used_by),
+        summarySection("Change Risk", summary.change_risk, "unknown"),
+        summarySection("Open Questions", summary.open_questions, "None recorded."),
+        summarySection("Confidence", summary.confidence, "unknown"),
+        `<p class="summary-foot">${edges.length} connected edge${edges.length === 1 ? "" : "s"} · ${outgoing.length} out · ${incoming.length} in</p>`,
       ].join("");
     }
 

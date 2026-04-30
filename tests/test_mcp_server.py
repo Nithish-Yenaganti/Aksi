@@ -165,6 +165,18 @@ def test_generate_visualization_scans_once(tmp_path: Path, monkeypatch) -> None:
     assert calls == 1
 
 
+def test_viewer_template_path_supports_installed_data_file(tmp_path: Path, monkeypatch) -> None:
+    installed_template = tmp_path / "share" / "aksi" / "ui" / "index.html"
+    installed_template.parent.mkdir(parents=True)
+    installed_template.write_text("installed template", encoding="utf-8")
+
+    monkeypatch.setattr(mcp_server, "_aksi_root", lambda: tmp_path / "missing")
+    monkeypatch.setattr(mcp_server.sys, "prefix", str(tmp_path))
+    monkeypatch.setattr(mcp_server.sys, "base_prefix", str(tmp_path))
+
+    assert mcp_server._viewer_template_path() == installed_template
+
+
 def test_mcp_returns_context_for_architecture_components(tmp_path: Path) -> None:
     (tmp_path / "mcp_server.py").write_text("from graph import build\n\ndef serve():\n    return build()\n", encoding="utf-8")
     (tmp_path / "graph.py").write_text("def build():\n    return 1\n", encoding="utf-8")

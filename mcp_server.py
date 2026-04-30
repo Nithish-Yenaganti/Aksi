@@ -7,6 +7,7 @@ import hashlib
 import http.server
 import json
 import socketserver
+import sys
 import threading
 from datetime import datetime, timezone
 from pathlib import Path
@@ -26,6 +27,19 @@ VALID_RESPONSE_MODES = {"full", "compact"}
 
 def _aksi_root() -> Path:
     return Path(__file__).resolve().parent
+
+
+def _viewer_template_path() -> Path:
+    candidates = [
+        _aksi_root() / "ui" / "index.html",
+        Path(sys.prefix) / "share" / "aksi" / "ui" / "index.html",
+        Path(sys.base_prefix) / "share" / "aksi" / "ui" / "index.html",
+    ]
+    for candidate in candidates:
+        if candidate.exists():
+            return candidate
+    searched = ", ".join(str(candidate) for candidate in candidates)
+    raise FileNotFoundError(f"Aksi viewer template not found. Checked: {searched}")
 
 
 def _repo(path: str = ".") -> Path:
@@ -96,7 +110,7 @@ def _script_json(payload: Any) -> str:
 
 
 def _write_static_viewer(repo: Path, architecture: dict[str, Any]) -> Path:
-    ui_source = (_aksi_root() / "ui" / "index.html").read_text(encoding="utf-8")
+    ui_source = _viewer_template_path().read_text(encoding="utf-8")
     summaries = _read_json(_summary_index_path(repo), {"summaries": {}})
     models = _read_json(_models_path(repo), {"models": {}})
     marker = "  <script>\n    const svg = d3.select"
