@@ -348,6 +348,7 @@ def test_generate_visualization_can_disable_summary_targets(tmp_path: Path) -> N
     (tmp_path / "app.py").write_text("def run():\n    return 1\n", encoding="utf-8")
 
     result = mcp_server.generate_visualization(str(tmp_path), summarize=False)
+    status = mcp_server.get_workflow_status(str(tmp_path), prepare_summary_targets=False)
 
     assert result["summary_mode"] == "disabled"
     assert result["summary_targets"] == {"structure": [], "architecture": [], "runtime": []}
@@ -356,6 +357,10 @@ def test_generate_visualization_can_disable_summary_targets(tmp_path: Path) -> N
     assert result["summary_completion"]["complete"] is True
     assert result["summary_completion"]["required"] is False
     assert result["summaries_complete"] is True
+    assert status["summary"]["mode"] == "disabled"
+    assert status["summary"]["complete"] is True
+    assert status["summary"]["remaining"] == 0
+    assert status["next_action"] == "refine_models"
 
 
 def test_generate_visualization_prepare_summary_targets_alias(tmp_path: Path) -> None:
@@ -390,6 +395,228 @@ def test_get_summary_worklist_returns_deduplicated_missing_and_stale_nodes(tmp_p
     assert third_by_id[file_item["node_id"]]["summary_status"] == "stale"
     assert third_by_id[file_item["node_id"]]["action"] == "refresh"
     assert len(third_by_id) == len(third["summary_worklist"])
+
+
+def test_get_context_batch_defaults_to_worklist_and_reports_limits(tmp_path: Path) -> None:
+    (tmp_path / "app.py").write_text("def run():\n    return 1\n", encoding="utf-8")
+
+    generated = mcp_server.generate_visualization(str(tmp_path))
+    batch = mcp_server.get_context_batch(path=str(tmp_path), limit=2)
+    bundle = mcp_server.get_summary_context_bundle(str(tmp_path), include_source=False)
+
+    assert batch["batch"]["defaulted_to_worklist"] is True
+    assert batch["batch"]["requested"] == len(generated["summary_worklist"])
+    assert batch["batch"]["returned"] == 2
+    assert batch["batch"]["truncated"] is True
+    assert len(batch["contexts"]) == 2
+    assert len(batch["items"]) == 2
+    assert batch["errors"] == []
+    assert all(item["context"]["node"]["id"] == item["node_id"] for item in batch["items"])
+    assert bundle["batch"]["include_source"] is False
+    assert bundle["contexts"]
+    assert all(context["source"] == "" for context in bundle["contexts"].values())
+    assert all(context["context_stats"]["source_included"] is False for context in bundle["contexts"].values())
+
+
+def test_get_context_batch_accepts_explicit_nodes_and_partial_errors(tmp_path: Path) -> None:
+    (tmp_path / "app.py").write_text("def run():\n    return 1\n", encoding="utf-8")
+
+    mcp_server.generate_visualization(str(tmp_path))
+    graph = mcp_server.get_map(str(tmp_path))
+    file_node = next(node for node in graph["nodes"].values() if node["type"] == "file")
+    batch = mcp_server.get_context_batch([file_node["id"], "file:missing.py"], str(tmp_path))
+
+    assert file_node["id"] in batch["contexts"]
+    assert batch["contexts"][file_node["id"]]["node"]["id"] == file_node["id"]
+    assert batch["errors"] == [{"node_id": "file:missing.py", "error": "Node not found: file:missing.py"}]
+    assert batch["batch"]["successes"] == 1
+    assert batch["batch"]["errors"] == 1
+
+
+def _save_all_worklist_summaries(path: Path) -> None:
+    worklist = mcp_server.get_summary_worklist(str(path))["summary_worklist"]
+    mcp_server.save_summaries(
+        [
+            {
+                "node_id": item["node_id"],
+                "summary": {
+                    "purpose": f"Summary for {item['node_id']}.",
+                    "behavior": "Grounded test summary.",
+                    "interfaces": "Test fixture.",
+                    "dependencies": "Scanned graph context.",
+                    "used_by": "MCP workflow tests.",
+                    "change_risk": "low: test fixture.",
+                    "open_questions": "None.",
+                    "confidence": "high",
+                },
+            }
+            for item in worklist
+        ],
+        str(path),
+    )
+
+
+def _save_current_test_models(path: Path) -> None:
+    mcp_server.save_architecture_model(
+        {"nodes": [{"id": "architecture:test", "name": "Test Architecture"}], "edges": []},
+        str(path),
+    )
+    mcp_server.save_runtime_model(
+        {"nodes": [{"id": "runtime:test", "name": "Test Runtime"}], "edges": []},
+        str(path),
+    )
+
+
+def test_get_workflow_status_recommends_summary_batch_and_withholds_viewer(tmp_path: Path) -> None:
+    (tmp_path / "app.py").write_text("def run():\n    return 1\n", encoding="utf-8")
+    generated = mcp_server.generate_visualization(str(tmp_path), serve_viewer=False)
+
+    status = mcp_server.get_workflow_status(str(tmp_path), limit=2)
+
+    assert status["next_action"] == "summarize_batch"
+    assert status["summary"]["complete"] is False
+    assert status["summary"]["remaining"] == len(generated["summary_worklist"])
+    assert status["summary"]["missing"] == len(generated["summary_worklist"])
+    assert status["summary"]["stale"] == 0
+    assert status["recommended_batch"]["tool"] == "get_summary_context_bundle"
+    assert status["recommended_batch"]["fallback_tool"] == "get_context_batch"
+    assert len(status["recommended_batch"]["node_ids"]) == 2
+    assert status["recommended_batch"]["truncated"] is True
+    assert status["viewer"]["releasable"] is False
+    assert "viewer_url" not in status["viewer"]
+    assert "viewer_http_url" not in status["viewer"]
+    assert "summary_worklist has" in status["viewer"]["withheld_reason"]
+    assert status["instructions"] == [
+        "Call get_summary_context_bundle(path=path, limit=limit) for recommended_batch.node_ids.",
+        "Write and verify one grounded summary per returned context.",
+        "Call save_summaries(items, path=path) once for the batch.",
+        "Call get_workflow_status(path=path, limit=limit) again.",
+    ]
+
+
+def test_get_workflow_status_recommends_model_refinement_after_summaries(tmp_path: Path) -> None:
+    (tmp_path / "app.py").write_text("def run():\n    return 1\n", encoding="utf-8")
+    mcp_server.generate_visualization(str(tmp_path), serve_viewer=False)
+    _save_all_worklist_summaries(tmp_path)
+
+    status = mcp_server.get_workflow_status(str(tmp_path))
+
+    assert status["next_action"] == "refine_models"
+    assert status["summary"]["complete"] is True
+    assert status["summary"]["remaining"] == 0
+    assert status["recommended_batch"]["tool"] is None
+    assert status["model"]["complete"] is False
+    assert status["model"]["architecture_required"] is True
+    assert status["model"]["runtime_required"] is True
+    assert status["model"]["seed_tool"] == "get_model_seed"
+    assert status["viewer"]["releasable"] is False
+    assert "required models: architecture, runtime" in status["viewer"]["withheld_reason"]
+    assert status["instructions"][0].startswith("Call get_model_seed")
+
+
+def test_get_model_seed_returns_compact_refinement_facts(tmp_path: Path) -> None:
+    (tmp_path / "server.ts").write_text(
+        "import debounce from 'lodash';\n"
+        "import { helper } from './utils';\n"
+        "export function start() {\n"
+        "  return debounce(helper, 10)();\n"
+        "}\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "utils.ts").write_text("export function helper() {\n  return 'ok';\n}\n", encoding="utf-8")
+    mcp_server.generate_visualization(str(tmp_path), serve_viewer=False)
+
+    seed = mcp_server.get_model_seed(str(tmp_path))
+
+    assert seed["source"] == "local_seed_for_host_llm_refinement"
+    assert seed["llm_called_by_aksi"] is False
+    assert seed["repo"]["counts"]["files"] == 2
+    assert seed["model_refinement"]["architecture_required"] is True
+    assert seed["model_refinement"]["runtime_required"] is True
+    assert seed["suggested_next"]["tool"] == "get_summary_context_bundle"
+    assert seed["architecture_seed"]["components"]
+    assert seed["architecture_seed"]["component_edges"] or seed["runtime_seed"]["dependency_edges"]
+    assert seed["runtime_seed"]["kind"] == "static_dependency_flow_seed"
+    assert "lodash" in seed["runtime_seed"]["unresolved_externals"]
+    assert any(item["path"] == "server.ts" for item in seed["architecture_seed"]["entrypoints"])
+    assert any(item["path"] == "server.ts" for item in seed["key_files"])
+    assert "get_context_batch" == seed["required_context"]["recommended_tool"]
+    assert "nodes" in seed["model_shape"]
+    assert "edges" in seed["model_shape"]
+
+
+def test_get_workflow_status_releases_viewer_when_complete(tmp_path: Path) -> None:
+    (tmp_path / "app.py").write_text("def run():\n    return 1\n", encoding="utf-8")
+    mcp_server.generate_visualization(str(tmp_path), serve_viewer=False)
+    _save_all_worklist_summaries(tmp_path)
+    _save_current_test_models(tmp_path)
+
+    status = mcp_server.get_workflow_status(str(tmp_path))
+
+    assert status["next_action"] == "release_viewer"
+    assert status["summary"]["complete"] is True
+    assert status["model"]["complete"] is True
+    assert status["model"]["current_models"] == {"architecture": True, "runtime": True}
+    assert status["viewer"]["releasable"] is True
+    assert status["viewer"]["withheld"] is False
+    assert status["viewer"]["withheld_reason"] is None
+    assert status["viewer"]["viewer_url"].startswith("file://")
+    if status["viewer"]["viewer_http_url"] is None:
+        assert status["viewer"]["viewer_http_error"]
+    else:
+        assert status["viewer"]["viewer_http_url"].startswith("http://127.0.0.1:")
+    assert status["instructions"] == [
+        "Use viewer_http_url when present, otherwise use viewer_url.",
+        "Share the viewer link with the user.",
+    ]
+
+    mcp_server.stop_viewer(str(tmp_path))
+
+
+def test_save_summaries_saves_batch_with_partial_failure_and_shrinks_worklist(tmp_path: Path) -> None:
+    (tmp_path / "app.py").write_text("def run():\n    return 1\n", encoding="utf-8")
+
+    generated = mcp_server.generate_visualization(str(tmp_path))
+    targets = generated["summary_worklist"][:2]
+    saved = mcp_server.save_summaries(
+        [
+            {"node_id": targets[0]["node_id"], "summary": {"purpose": "first summary"}},
+            {"node_id": "file:missing.py", "summary": {"purpose": "missing node"}},
+            {"node_id": targets[1]["node_id"], "summary": {"purpose": "second summary"}},
+        ],
+        str(tmp_path),
+    )
+    worklist_after = mcp_server.get_summary_worklist(str(tmp_path))
+    remaining_ids = {item["node_id"] for item in worklist_after["summary_worklist"]}
+    listed = mcp_server.list_summaries(str(tmp_path))
+    viewer = (tmp_path / "Files" / "index.html").read_text(encoding="utf-8")
+
+    assert saved["saved"] == 2
+    assert saved["failed"] == 1
+    assert saved["errors"][0]["node_id"] == "file:missing.py"
+    assert targets[0]["node_id"] not in remaining_ids
+    assert targets[1]["node_id"] not in remaining_ids
+    assert worklist_after["summary_completion"]["remaining"] == len(generated["summary_worklist"]) - 2
+    assert listed["summaries"][targets[0]["node_id"]]["summary"] == {"purpose": "first summary"}
+    assert "first summary" in viewer
+
+
+def test_save_summaries_reports_invalid_items_without_refreshing(tmp_path: Path) -> None:
+    (tmp_path / "app.py").write_text("def run():\n    return 1\n", encoding="utf-8")
+    generated = mcp_server.generate_visualization(str(tmp_path))
+
+    saved = mcp_server.save_summaries(
+        [
+            {"node_id": generated["summary_worklist"][0]["node_id"]},
+            {"node_id": "", "summary": "empty id"},
+            "not a dict",
+        ],
+        str(tmp_path),
+    )
+
+    assert saved["saved"] == 0
+    assert saved["failed"] == 3
+    assert saved["summary_completion"]["remaining"] == len(generated["summary_worklist"])
 
 
 def test_summary_targets_skip_fresh_and_refresh_changed_nodes(tmp_path: Path) -> None:

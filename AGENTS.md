@@ -11,13 +11,14 @@ Aksi scans locally. The scanner and graph builder are the source of truth for fi
 When a user asks to visualize, refresh, inspect, or explain a project through Aksi MCP:
 
 1. Call `generate_visualization(path, prepare_summary_targets=True)`.
-2. Inspect `summary_mode`, `summary_completion`, `summary_worklist`, and `model_refinement`.
-3. Treat `summary_worklist` as the executable queue. Do not iterate `summary_targets` directly for required work.
-4. For every item in `summary_worklist`, call `get_context(target.node_id, path)`, write a grounded summary from that exact context, verify it matches the node, then call `save_summary(target.node_id, summary, path)`.
-5. Re-check with `get_summary_worklist(path)` or `generate_visualization(path, prepare_summary_targets=True)`. Continue until the worklist is empty and `summary_completion.required` is `false`.
-6. After summaries are current, inspect the current `model_refinement`. If `architecture_required` or `runtime_required` is `true`, build grounded refined models from `get_map(path)` and relevant `get_context(...)` output, then call `save_architecture_model(model, path)` and/or `save_runtime_model(model, path)`.
-7. Re-check model state after saving. Continue until `model_refinement.complete` is `true`.
-8. Only after summaries are current and `model_refinement.complete` is `true`, give the user `viewer_http_url` when present, otherwise `viewer_url`.
+2. Call `get_workflow_status(path)` and follow its `next_action`, `recommended_batch`, `viewer`, and exact `instructions`.
+3. If `next_action` is `summarize_batch`, treat `summary_worklist`/`recommended_batch.node_ids` as the executable queue. Do not iterate `summary_targets` directly for required work.
+4. Prefer the tool named by `recommended_batch.tool` (`get_summary_context_bundle(path)` by default) or `get_context_batch(path=path)` to fetch context for the current missing/stale worklist in one call. Use `limit` if the worklist is too large for the host context window, then repeat.
+5. Write grounded summaries from the exact returned contexts, verify each summary matches its node, then call `save_summaries(items, path)` once per batch. Keep `get_context(...)` and `save_summary(...)` for targeted or backwards-compatible one-node workflows.
+6. After each `save_summaries(...)` or `save_summary(...)`, call `get_workflow_status(path)` again. Continue summary batches until `next_action` changes away from `summarize_batch`.
+7. If `next_action` is `refine_models`, call `get_model_seed(path)` first. Use that compact seed plus `get_map(path)` and relevant `get_context_batch(...)`/`get_context(...)` output to build grounded refined models, then call `save_architecture_model(model, path)` and/or `save_runtime_model(model, path)` according to `model.architecture_required` and `model.runtime_required`.
+8. After each model save, call `get_workflow_status(path)` again. Continue until `next_action` is `release_viewer`.
+9. Only when `get_workflow_status(path).next_action` is `release_viewer`, give the user `viewer.viewer_http_url` when present, otherwise `viewer.viewer_url`.
 
 Do not ask the user to run `aksi.py` manually when MCP tools are available.
 
@@ -48,9 +49,9 @@ stale   -> action: refresh
 fresh   -> action: skip
 ```
 
-`save_summary` stores the host-written summary under `Files/context/`, updates `Files/context/index.json`, and regenerates `Files/index.html`. Only `save_summary` clears summary work; saving refined architecture or runtime models does not remove items from `summary_worklist`.
+`save_summaries` stores host-written summaries under `Files/context/`, updates `Files/context/index.json`, and regenerates `Files/index.html` once for the batch. `save_summary` does the same for one node. Only summary saves clear summary work; saving refined architecture or runtime models does not remove items from `summary_worklist`.
 
-Before calling `save_summary`, verify the summary against the `get_context` result. A valid summary must match the returned node name, node type, path, source, symbols, edges, neighbors, dependencies, and context limits. If it does not match, rewrite it from the same `get_context` output before saving.
+Before calling `save_summaries` or `save_summary`, verify each summary against the matching `get_context_batch`/`get_context` result. A valid summary must match the returned node name, node type, path, source, symbols, edges, neighbors, dependencies, and context limits. If it does not match, rewrite it from the same context output before saving.
 
 Preferred summary shape:
 
@@ -67,7 +68,7 @@ Preferred summary shape:
 }
 ```
 
-Write summaries only from `get_context` output. Use low confidence when context is partial. Do not copy summaries between nodes.
+Write summaries only from `get_context_batch`, `get_summary_context_bundle`, or `get_context` output. Use low confidence when context is partial. Do not copy summaries between nodes.
 
 ## Architecture and Runtime Rules
 
@@ -79,18 +80,25 @@ Write summaries only from `get_context` output. Use low confidence when context 
 
 Architecture and Runtime Flow tabs start with local Aksi candidates. They are useful previews, not complete host-understood models.
 
-For a complete Aksi run, the host LLM must reanalyze Architecture and Runtime Flow from `get_map` plus relevant `get_context` output, write grounded summaries for their rectangles, save those summaries with `save_summary`, and save the final refined diagrams with `save_architecture_model` and `save_runtime_model`.
+For a complete Aksi run, the host LLM must reanalyze Architecture and Runtime Flow from `get_model_seed`, `get_map`, and relevant `get_context_batch`/`get_context` output, write grounded summaries for their rectangles, save those summaries with `save_summaries`, and save the final refined diagrams with `save_architecture_model` and `save_runtime_model`.
 
-Aksi stores a source graph hash with each refined model. If the repo graph changes later, `model_refinement.stale_models` marks saved models stale and sets `architecture_required` or `runtime_required` back to `true`. Refresh stale models from current `get_map` and `get_context` output.
+`get_model_seed(path)` is the preferred starting point for refinement. It returns local component candidates, dependency-flow candidates, entrypoints, external dependencies, stale/unused hints, current model-refinement state, and recommended context nodes. It is not an LLM answer; the host LLM still writes the final Architecture and Runtime models from that seed and source context.
+
+Aksi stores a source graph hash with each refined model. If the repo graph changes later, `model_refinement.stale_models` marks saved models stale and sets `architecture_required` or `runtime_required` back to `true`. Refresh stale models from current `get_model_seed`, `get_map`, and `get_context` output.
 
 Mark uncertainty in refined models. Do not add unsupported components, flows, callers, dependencies, or runtime behavior.
 
 ## MCP Tools
 
 - `generate_visualization(path=".", summarize=True, prepare_summary_targets=None, serve_viewer=True)`
+- `get_workflow_status(path=".", limit=None)`
+- `get_model_seed(path=".")`
 - `get_summary_worklist(path=".")`
 - `get_context(node_id, path=".")`
+- `get_context_batch(node_ids=None, path=".", limit=None, include_source=True)`
+- `get_summary_context_bundle(path=".", limit=None, include_source=True)`
 - `save_summary(node_id, summary, path=".")`
+- `save_summaries(items, path=".")`
 - `get_map(path=".")`
 - `get_summary(node_id, path=".")`
 - `list_summaries(path=".")`
@@ -100,7 +108,7 @@ Mark uncertainty in refined models. Do not add unsupported components, flows, ca
 - `stop_viewer(path=".")`
 - `scan_repo(path=".")`
 
-Passing `summarize=False` or `prepare_summary_targets=False` disables summary targets and makes `summary_completion.required` false. Do this only when the user explicitly wants a graph without host-written summaries.
+Passing `summarize=False` or `prepare_summary_targets=False` disables summary targets and makes `summary_completion.required` false. If you continue with `get_workflow_status` for that graph-only run, pass `prepare_summary_targets=False` there too. Do this only when the user explicitly wants a graph without host-written summaries.
 
 ## Project Rules
 

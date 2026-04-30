@@ -686,8 +686,8 @@ def _summary_status(summary_targets: dict[str, list[dict[str, Any]]], worklist: 
 def _summary_completion(worklist: list[dict[str, Any]]) -> dict[str, Any]:
     remaining = len(worklist)
     required_action = (
-        "For every summary_worklist item, call get_context(node_id, path), write a grounded host-LLM "
-        "summary, then call save_summary(node_id, summary, path)."
+        "Call get_context_batch(path=path) or get_summary_context_bundle(path=path), write grounded "
+        "host-LLM summaries, then call save_summaries(items, path)."
     )
     return {
         "complete": remaining == 0,
@@ -699,6 +699,103 @@ def _summary_completion(worklist: list[dict[str, Any]]) -> dict[str, Any]:
             "The viewer can show the graph before summaries are complete, but rectangle explanations "
             "only become grounded after save_summary updates Files/context/index.json."
         ),
+    }
+
+
+def _context_for_node(
+    repo: Path,
+    architecture: dict[str, Any],
+    node_id: str,
+    include_source: bool = True,
+) -> dict[str, Any]:
+    nodes = architecture.get("nodes", {})
+    node = nodes.get(node_id)
+    if node is None:
+        return {"error": f"Node not found: {node_id}", "node_id": node_id}
+
+    if node.get("type") == "repo":
+        context = _repo_context(repo, architecture, node, nodes)
+    elif node.get("type") == "folder":
+        context = _folder_context(repo, architecture, node, nodes)
+    elif node.get("type") == "component":
+        context = _component_context(repo, architecture, node, nodes)
+    else:
+        file_path = node.get("path")
+        file_node = _file_node_for(node, nodes)
+
+        source = _read_source(repo, file_path) if file_path else ""
+
+        related_edge_ids = [
+            edge
+            for edge in architecture.get("edges", [])
+            if edge.get("source") == file_node.get("id") or edge.get("target") == file_node.get("id")
+        ]
+        neighbor_ids = sorted(
+            {
+                endpoint
+                for edge in related_edge_ids
+                for endpoint in (edge.get("source"), edge.get("target"))
+                if endpoint and endpoint != file_node.get("id")
+            }
+        )
+        neighbors = [nodes[item] for item in neighbor_ids if item in nodes]
+        children = [nodes[item] for item in file_node.get("children", []) if item in nodes]
+        saved_summary = get_summary(node_id, str(repo))
+
+        context = {
+            "node": node,
+            "file": file_node,
+            "source": source,
+            "symbols": children,
+            "edges": related_edge_ids,
+            "neighbors": neighbors,
+            "saved_summary": None if saved_summary.get("missing") else saved_summary,
+        }
+
+    source_chars = len(context.get("source") or "")
+    source_count = len(context.get("sources") or [])
+    context["context_stats"] = {
+        "source_included": include_source,
+        "source_chars": source_chars if include_source else 0,
+        "source_chars_available": source_chars,
+        "sources_count": source_count,
+        "symbols_count": len(context.get("symbols") or []),
+        "edges_count": len(context.get("edges") or []),
+        "file_edges_count": len(context.get("file_edges") or []),
+        "neighbors_count": len(context.get("neighbors") or []),
+    }
+    if include_source:
+        return context
+
+    stripped_sources = []
+    for item in context.get("sources") or []:
+        if isinstance(item, dict):
+            stripped_sources.append(
+                {
+                    key: value
+                    for key, value in item.items()
+                    if key != "source"
+                }
+            )
+    return {
+        **context,
+        "source": "",
+        "sources": stripped_sources,
+    }
+
+
+def _limited_node_ids(node_ids: list[str] | None, worklist: list[dict[str, Any]], limit: int | None) -> tuple[list[str], dict[str, Any]]:
+    requested = node_ids or [item["node_id"] for item in worklist if item.get("node_id")]
+    normalized_limit = None if limit is None or limit < 0 else limit
+    selected = requested[:normalized_limit] if normalized_limit is not None else requested
+    return selected, {
+        "requested": len(requested),
+        "returned": len(selected),
+        "limit": normalized_limit,
+        "truncated": normalized_limit is not None and len(requested) > normalized_limit,
+        "remaining_after_limit": max(0, len(requested) - len(selected)),
+        "defaulted_to_worklist": not node_ids,
+        "worklist_total": len(worklist),
     }
 
 
@@ -741,6 +838,343 @@ def _model_refinement_status(repo: Path, architecture: dict[str, Any]) -> dict[s
             "Structure is the concrete scanned graph. Architecture and Runtime are local static candidates "
             "until current host-refined models are saved."
         ),
+    }
+
+
+def _model_seed(repo: Path) -> dict[str, Any]:
+    architecture = refresh_stale_flags(load_architecture(repo), repo)
+    _write_summary_index(repo)
+    nodes = architecture.get("nodes", {})
+    files = [node for node in nodes.values() if node.get("type") == "file"]
+    symbol_types = {"function", "class", "interface", "struct", "type"}
+    symbols = [node for node in nodes.values() if node.get("type") in symbol_types]
+    entrypoint_names = {
+        "__init__.py",
+        "aksi.py",
+        "app.py",
+        "cli.py",
+        "index.js",
+        "index.ts",
+        "index.tsx",
+        "main.py",
+        "main.ts",
+        "main.tsx",
+        "mcp_server.py",
+        "server.py",
+        "server.ts",
+        "server.tsx",
+    }
+    entrypoints = [
+        {
+            "id": node.get("id"),
+            "name": node.get("name"),
+            "path": node.get("path"),
+            "language": node.get("language"),
+            "stale": bool(node.get("stale")),
+            "unused_hint": bool(node.get("unused")),
+        }
+        for node in sorted(files, key=lambda item: item.get("path", ""))
+        if Path(str(node.get("path", ""))).name in entrypoint_names
+        or str(node.get("path", "")).startswith(("tests/", "test/"))
+    ]
+    if not entrypoints and files:
+        first_file = sorted(files, key=lambda item: item.get("path", ""))[0]
+        entrypoints.append(
+            {
+                "id": first_file.get("id"),
+                "name": first_file.get("name"),
+                "path": first_file.get("path"),
+                "language": first_file.get("language"),
+                "stale": bool(first_file.get("stale")),
+                "unused_hint": bool(first_file.get("unused")),
+                "note": "Fallback candidate because no conventional entrypoint name was found.",
+            }
+        )
+    key_files = [
+        {
+            "id": node.get("id"),
+            "name": node.get("name"),
+            "path": node.get("path"),
+            "language": node.get("language"),
+            "incoming_local_imports": node.get("usage_count", 0),
+            "outgoing_local_imports": node.get("outgoing_usage_count", 0),
+            "stale": bool(node.get("stale")),
+            "unused_hint": bool(node.get("unused")),
+        }
+        for node in sorted(
+            files,
+            key=lambda item: (
+                -int(item.get("usage_count") or 0),
+                -int(item.get("outgoing_usage_count") or 0),
+                item.get("path", ""),
+            ),
+        )[:25]
+    ]
+
+    architecture_components = []
+    for component in sorted(architecture.get("components", []), key=lambda item: item.get("name", "")):
+        architecture_components.append(
+            {
+                "id": component.get("id"),
+                "name": component.get("name"),
+                "role": component.get("role"),
+                "detail": component.get("detail"),
+                "why": component.get("why"),
+                "how": component.get("how"),
+                "files": component.get("files", []),
+                "file_count": component.get("file_count", 0),
+                "symbol_count": component.get("symbol_count", 0),
+                "import_count": component.get("import_count", 0),
+                "stale": bool(component.get("stale")),
+                "unused_hint": bool(component.get("unused")),
+            }
+        )
+
+    def endpoint(edge: dict[str, Any], key: str) -> dict[str, Any]:
+        node = nodes.get(edge.get(key, ""), {})
+        return {
+            "id": edge.get(key),
+            "name": node.get("name") or edge.get(key),
+            "type": node.get("type"),
+            "path": node.get("path"),
+        }
+
+    component_edges = [
+        {
+            "id": edge.get("id"),
+            "type": edge.get("type"),
+            "source": endpoint(edge, "source"),
+            "target": endpoint(edge, "target"),
+            "import_text": edge.get("import_text"),
+            "examples": edge.get("examples", []),
+            "count": edge.get("count", 1),
+        }
+        for edge in architecture.get("component_edges", [])
+    ]
+    dependency_edges = [
+        {
+            "id": edge.get("id"),
+            "type": edge.get("type"),
+            "source": endpoint(edge, "source"),
+            "target": endpoint(edge, "target"),
+            "import_text": edge.get("import_text"),
+            "module": edge.get("module"),
+            "is_external": str(edge.get("target", "")).startswith("external:"),
+        }
+        for edge in architecture.get("edges", [])[:80]
+    ]
+    external_dependencies = sorted(
+        {
+            nodes[edge.get("target", "")].get("name")
+            for edge in architecture.get("edges", [])
+            if str(edge.get("target", "")).startswith("external:") and edge.get("target", "") in nodes
+        }
+    )
+    stale_files = [
+        {"id": node.get("id"), "path": node.get("path")}
+        for node in sorted(files, key=lambda item: item.get("path", ""))
+        if node.get("stale")
+    ]
+    unused_files = [
+        {"id": node.get("id"), "path": node.get("path"), "reason": node.get("dead_reason")}
+        for node in sorted(files, key=lambda item: item.get("path", ""))
+        if node.get("unused")
+    ]
+    unused_symbols = [
+        {
+            "id": node.get("id"),
+            "name": node.get("name"),
+            "path": node.get("path"),
+            "start_line": node.get("start_line"),
+            "reason": node.get("dead_reason"),
+        }
+        for node in sorted(symbols, key=lambda item: (item.get("path", ""), item.get("start_line", 0)))
+        if node.get("unused")
+    ][:80]
+    model_refinement = _model_refinement_status(repo, architecture)
+    summary_targets = _summary_targets(repo, architecture)
+    summary_worklist = _summary_worklist(summary_targets)
+    summary_completion = _summary_completion(summary_worklist)
+    if not summary_completion["complete"]:
+        suggested_next = {
+            "action": "summarize_batch",
+            "tool": "get_summary_context_bundle",
+            "reason": "Summaries must be current before refined models complete the workflow.",
+        }
+    elif not model_refinement["complete"]:
+        suggested_next = {
+            "action": "refine_models",
+            "tool": "get_model_seed",
+            "reason": "Use this seed plus get_context/get_context_batch evidence to save required refined models.",
+        }
+    else:
+        suggested_next = {
+            "action": "release_viewer",
+            "tool": "get_workflow_status",
+            "reason": "Workflow is complete; get_workflow_status returns the viewer link.",
+        }
+    return {
+        "path": str(repo),
+        "source": "local_seed_for_host_llm_refinement",
+        "llm_called_by_aksi": False,
+        "source_graph_hash": model_refinement["source_graph_hash"],
+        "repo": {
+            "name": nodes.get(architecture.get("root", ""), {}).get("name") or repo.name,
+            "summary": architecture.get("repo_summary"),
+            "counts": summarize_architecture(architecture),
+            "scanner": architecture.get("scanner", {}),
+            "generated_at": architecture.get("generated_at"),
+        },
+        "entrypoints": entrypoints,
+        "key_files": key_files,
+        "model_refinement": model_refinement,
+        "summary_completion": summary_completion,
+        "summary_worklist_remaining": len(summary_worklist),
+        "suggested_next": suggested_next,
+        "architecture_seed": {
+            "components": architecture_components,
+            "component_edges": component_edges,
+            "entrypoints": entrypoints,
+            "instruction": (
+                "Host LLM should turn these local component candidates into a concise project architecture model. "
+                "Keep only supported components and mark uncertainty."
+            ),
+        },
+        "runtime_seed": {
+            "kind": "static_dependency_flow_seed",
+            "entrypoints": entrypoints,
+            "dependency_edges": dependency_edges,
+            "external_dependencies": external_dependencies,
+            "unresolved_externals": external_dependencies,
+            "truncated_dependency_edges": max(0, len(architecture.get("edges", [])) - len(dependency_edges)),
+            "instruction": (
+                "Host LLM should infer a cautious input/data flow only from dependency edges and context evidence. "
+                "Do not claim traced runtime execution unless source context proves it."
+            ),
+        },
+        "risk_hints": {
+            "stale_files": stale_files,
+            "unused_files": unused_files,
+            "unused_symbols": unused_symbols,
+            "unused_note": architecture.get("analysis", {}).get("note"),
+        },
+        "required_context": {
+            "repo_root": architecture.get("root"),
+            "entrypoints": [item["id"] for item in entrypoints if item.get("id")],
+            "components": [item["id"] for item in architecture_components if item.get("id")],
+            "recommended_tool": "get_context_batch",
+        },
+        "model_shape": {
+            "nodes": "Non-empty list of {id, name, type, summary/detail, confidence, evidence_node_ids}.",
+            "edges": "List of {source, target, type, label/detail, evidence_edge_ids}; endpoints must reference model node ids.",
+        },
+    }
+
+
+def _workflow_status(
+    repo: Path,
+    limit: int | None = None,
+    prepare_summary_targets: bool = True,
+) -> dict[str, Any]:
+    architecture = refresh_stale_flags(load_architecture(repo), repo)
+    _write_summary_index(repo)
+    summary_targets = _summary_targets(repo, architecture) if prepare_summary_targets else _empty_summary_targets()
+    summary_worklist = _summary_worklist(summary_targets)
+    summary_counts = _summary_status(summary_targets, summary_worklist)
+    summary_completion = _summary_completion(summary_worklist)
+    model_refinement = _model_refinement_status(repo, architecture)
+    selected_ids, batch_limits = _limited_node_ids(None, summary_worklist, limit)
+
+    worklist_missing = sum(1 for item in summary_worklist if item.get("summary_status") == "missing")
+    worklist_stale = sum(1 for item in summary_worklist if item.get("summary_status") == "stale")
+    summaries_complete = bool(summary_completion["complete"])
+    models_complete = bool(model_refinement["complete"])
+    releasable = summaries_complete and models_complete
+
+    if not summaries_complete:
+        next_action = "summarize_batch"
+        withheld_reason = f"summary_worklist has {len(summary_worklist)} remaining items."
+        instructions = [
+            "Call get_summary_context_bundle(path=path, limit=limit) for recommended_batch.node_ids.",
+            "Write and verify one grounded summary per returned context.",
+            "Call save_summaries(items, path=path) once for the batch.",
+            "Call get_workflow_status(path=path, limit=limit) again.",
+        ]
+    elif not models_complete:
+        next_action = "refine_models"
+        required_models = [
+            name
+            for name, required in (
+                ("architecture", model_refinement["architecture_required"]),
+                ("runtime", model_refinement["runtime_required"]),
+            )
+            if required
+        ]
+        withheld_reason = f"model_refinement is incomplete; required models: {', '.join(required_models)}."
+        instructions = [
+            "Call get_model_seed(path=path) for compact architecture/runtime candidates and risk hints.",
+            "Call get_map(path=path) and relevant get_context_batch/get_context calls for any evidence that needs source detail.",
+            "Build only the required architecture/runtime models from returned map and context data.",
+            "Call save_architecture_model(model, path=path) and/or save_runtime_model(model, path=path).",
+            "Call get_workflow_status(path=path, limit=limit) again.",
+        ]
+    else:
+        next_action = "release_viewer"
+        withheld_reason = None
+        instructions = [
+            "Use viewer_http_url when present, otherwise use viewer_url.",
+            "Share the viewer link with the user.",
+        ]
+
+    viewer_status: dict[str, Any] = {
+        "releasable": releasable,
+        "withheld": not releasable,
+        "withheld_reason": withheld_reason,
+    }
+    if releasable:
+        viewer_file = _viewer_path(repo)
+        viewer_status["viewer_url"] = viewer_file.as_uri()
+        try:
+            viewer_status["viewer_http_url"] = _viewer_http_url(repo)
+            viewer_status["viewer_http_error"] = None
+        except OSError as error:
+            viewer_status["viewer_http_url"] = None
+            viewer_status["viewer_http_error"] = str(error)
+
+    return {
+        "path": str(repo),
+        "next_action": next_action,
+        "summary": {
+            "complete": summaries_complete,
+            "required": bool(summary_completion["required"]),
+            "mode": "host_llm_worklist" if prepare_summary_targets else "disabled",
+            "remaining": len(summary_worklist),
+            "missing": worklist_missing,
+            "stale": worklist_stale,
+            "target_counts": summary_counts,
+        },
+        "summary_worklist": summary_worklist,
+        "recommended_batch": {
+            "tool": "get_summary_context_bundle" if summary_worklist else None,
+            "fallback_tool": "get_context_batch" if summary_worklist else None,
+            "node_ids": selected_ids,
+            "limit": batch_limits["limit"],
+            "remaining_after_limit": batch_limits["remaining_after_limit"],
+            "truncated": batch_limits["truncated"],
+            "call": "get_summary_context_bundle(path=path, limit=limit)" if summary_worklist else None,
+        },
+        "model": {
+            "complete": models_complete,
+            "architecture_required": model_refinement["architecture_required"],
+            "runtime_required": model_refinement["runtime_required"],
+            "current_models": model_refinement["current_models"],
+            "stale_models": model_refinement["stale_models"],
+            "saved_models": model_refinement["saved_models"],
+            "source_graph_hash": model_refinement["source_graph_hash"],
+            "seed_tool": "get_model_seed" if not models_complete else None,
+        },
+        "viewer": viewer_status,
+        "instructions": instructions,
     }
 
 
@@ -825,11 +1259,12 @@ def generate_visualization(
         },
         "host_llm_required": bool(summary_worklist),
         "summary_workflow": [
-            "for target in summary_worklist:",
-            "    context = get_context(target['node_id'], path)",
-            "    summary = host_llm_write_summary(context)",
-            "    verify_summary_matches_context(summary, context)",
-            "    save_summary(target['node_id'], summary, path)",
+            "bundle = get_summary_context_bundle(path)",
+            "summary_worklist = bundle['summary_worklist']",
+            "for item in bundle['items']:",
+            "    summary = host_llm_write_summary(item['context'])",
+            "    verify_summary_matches_context(summary, item['context'])",
+            "save_summaries(items, path)",
         ],
         "summary_schema": {
             "purpose": "What this node is for in one sentence.",
@@ -846,9 +1281,10 @@ def generate_visualization(
             "Complete summary_worklist first; summaries and model refinement are separate loops.",
             "Call get_map(path) and get_context(node_id, path) for repo root and important files/components.",
             "Host LLM may refine labels and grouping only from grounded get_map/get_context evidence.",
+            "Host LLM should call get_model_seed(path) first for compact local Architecture/Runtime candidates.",
             "Host LLM calls save_architecture_model(model, path) for an optional grounded architecture model.",
             "Host LLM calls save_runtime_model(model, path) for an optional grounded runtime/input-flow model.",
-            "Refined models do not clear summary_worklist; only save_summary clears summary work.",
+            "Refined models do not clear summary_worklist; only save_summaries/save_summary clears summary work.",
             "Mark uncertainty and do not add unsupported components, flows, callers, dependencies, or runtime behavior.",
             "Aksi regenerates Files/index.html and the viewer prefers saved host-refined models.",
         ],
@@ -873,12 +1309,12 @@ def generate_visualization(
         "next_steps": [
             "Inspect summary_mode, summary_completion, and summary_worklist before presenting the viewer as complete.",
             "Treat summary_worklist as the executable queue; do not iterate summary_targets directly for required work.",
-            "If summary_completion.required is true, call get_context for every summary_worklist item and write grounded host-LLM summaries.",
+            "If summary_completion.required is true, call get_context_batch or get_summary_context_bundle for summary_worklist items and write grounded host-LLM summaries.",
             "Verify each summary matches the exact get_context node, path, type, source, edges, neighbors, and context limits; re-summarize mismatches before saving.",
-            "Call save_summary for each written explanation, then re-check completion with get_summary_worklist or generate_visualization.",
+            "Call save_summaries for verified explanations, or save_summary for a single targeted explanation, then re-check completion with get_summary_worklist or generate_visualization.",
             "Only say saved rectangle summaries are current when summary_mode is host_llm_worklist and refreshed summary_completion.complete is true.",
             "If summary_mode is disabled, say the graph is ready without summary targets.",
-            "After summaries are current, inspect model_refinement; if architecture_required or runtime_required is true, write grounded refined models from get_map/get_context.",
+            "After summaries are current, inspect model_refinement; if architecture_required or runtime_required is true, call get_model_seed, then write grounded refined models from seed/map/context evidence.",
             "viewer_http_url and viewer_url are withheld until summaries and required model refinement are complete; do not stop at viewer_file.",
             "Use save_architecture_model and save_runtime_model only for optional grounded refinements; they do not clear summary_worklist.",
         ],
@@ -915,55 +1351,77 @@ def get_summary_worklist(path: str = ".") -> dict[str, Any]:
 
 
 @mcp.tool
+def get_workflow_status(
+    path: str = ".",
+    limit: int | None = None,
+    prepare_summary_targets: bool = True,
+) -> dict[str, Any]:
+    """Return the next Aksi workflow action without requiring agents to interpret raw status fields."""
+    return _workflow_status(_repo(path), limit=limit, prepare_summary_targets=prepare_summary_targets)
+
+
+@mcp.tool
+def get_model_seed(path: str = ".") -> dict[str, Any]:
+    """Return compact local facts that help the host LLM refine Architecture and Runtime models."""
+    return _model_seed(_repo(path))
+
+
+@mcp.tool
 def get_context(node_id: str, path: str = ".") -> dict[str, Any]:
     """Return source code and neighbor metadata for a node."""
     repo = _repo(path)
     architecture = refresh_stale_flags(load_architecture(repo), repo)
-    nodes = architecture.get("nodes", {})
-    node = nodes.get(node_id)
-    if node is None:
-        return {"error": f"Node not found: {node_id}", "node_id": node_id}
+    return _context_for_node(repo, architecture, node_id)
 
-    if node.get("type") == "repo":
-        return _repo_context(repo, architecture, node, nodes)
 
-    if node.get("type") == "folder":
-        return _folder_context(repo, architecture, node, nodes)
+@mcp.tool
+def get_context_batch(
+    node_ids: list[str] | None = None,
+    path: str = ".",
+    limit: int | None = None,
+    include_source: bool = True,
+) -> dict[str, Any]:
+    """Return context for many summary nodes, defaulting to the missing/stale worklist."""
+    repo = _repo(path)
+    architecture = refresh_stale_flags(load_architecture(repo), repo)
+    _write_summary_index(repo)
+    summary_targets = _summary_targets(repo, architecture)
+    worklist = _summary_worklist(summary_targets)
+    selected_ids, batch_limits = _limited_node_ids(node_ids, worklist, limit)
+    contexts: dict[str, Any] = {}
+    items: list[dict[str, Any]] = []
+    errors: list[dict[str, Any]] = []
 
-    if node.get("type") == "component":
-        return _component_context(repo, architecture, node, nodes)
-
-    file_path = node.get("path")
-    file_node = _file_node_for(node, nodes)
-
-    source = _read_source(repo, file_path) if file_path else ""
-
-    related_edge_ids = [
-        edge
-        for edge in architecture.get("edges", [])
-        if edge.get("source") == file_node.get("id") or edge.get("target") == file_node.get("id")
-    ]
-    neighbor_ids = sorted(
-        {
-            endpoint
-            for edge in related_edge_ids
-            for endpoint in (edge.get("source"), edge.get("target"))
-            if endpoint and endpoint != file_node.get("id")
-        }
-    )
-    neighbors = [nodes[item] for item in neighbor_ids if item in nodes]
-    children = [nodes[item] for item in file_node.get("children", []) if item in nodes]
-    saved_summary = get_summary(node_id, str(repo))
+    for node_id in selected_ids:
+        context = _context_for_node(repo, architecture, node_id, include_source=include_source)
+        if context.get("error"):
+            error = {"node_id": node_id, "error": context["error"]}
+            errors.append(error)
+            items.append(error)
+            continue
+        contexts[node_id] = context
+        items.append({"node_id": node_id, "context": context})
 
     return {
-        "node": node,
-        "file": file_node,
-        "source": source,
-        "symbols": children,
-        "edges": related_edge_ids,
-        "neighbors": neighbors,
-        "saved_summary": None if saved_summary.get("missing") else saved_summary,
+        "path": str(repo),
+        "contexts": contexts,
+        "items": items,
+        "errors": errors,
+        "batch": {
+            **batch_limits,
+            "include_source": include_source,
+            "successes": len(contexts),
+            "errors": len(errors),
+        },
+        "summary_worklist": worklist,
+        "summary_completion": _summary_completion(worklist),
     }
+
+
+@mcp.tool
+def get_summary_context_bundle(path: str = ".", limit: int | None = None, include_source: bool = True) -> dict[str, Any]:
+    """Return the current summary worklist and matching contexts in one call."""
+    return get_context_batch(node_ids=None, path=path, limit=limit, include_source=include_source)
 
 
 @mcp.tool
@@ -979,6 +1437,65 @@ def save_summary(node_id: str, summary: Any, path: str = ".") -> dict[str, Any]:
     _write_summary_index(repo)
     _write_static_viewer(repo, refresh_stale_flags(load_architecture(repo), repo))
     return saved
+
+
+@mcp.tool
+def save_summaries(items: list[dict[str, Any]], path: str = ".") -> dict[str, Any]:
+    """Persist many LLM-written summaries and refresh the summary index/viewer once."""
+    repo = _repo(path)
+    results: list[dict[str, Any]] = []
+    saved_records: dict[str, Any] = {}
+    saved_count = 0
+
+    if not isinstance(items, list):
+        return {"error": "items must be a list of {node_id, summary} objects", "path": str(repo)}
+
+    for index, item in enumerate(items):
+        if not isinstance(item, dict):
+            results.append({"index": index, "saved": False, "error": "item must be an object"})
+            continue
+        node_id = item.get("node_id")
+        if not isinstance(node_id, str) or not node_id:
+            results.append({"index": index, "saved": False, "error": "item.node_id must be a non-empty string"})
+            continue
+        if "summary" not in item:
+            results.append({"index": index, "node_id": node_id, "saved": False, "error": "item.summary is required"})
+            continue
+        try:
+            saved = _save_summary_record(repo, node_id, item["summary"], "llm_host")
+        except KeyError:
+            results.append({"index": index, "node_id": node_id, "saved": False, "error": f"Node not found: {node_id}"})
+            continue
+        except TypeError as error:
+            results.append(
+                {
+                    "index": index,
+                    "node_id": node_id,
+                    "saved": False,
+                    "error": f"Summary is not JSON serializable: {error}",
+                }
+            )
+            continue
+        saved_records[node_id] = saved["record"]
+        saved_count += 1
+        results.append({"index": index, "node_id": node_id, **saved})
+
+    if saved_records:
+        _write_summary_index(repo, saved_records)
+        _write_static_viewer(repo, refresh_stale_flags(load_architecture(repo), repo))
+
+    worklist_state = get_summary_worklist(str(repo))
+    failures = [result for result in results if not result.get("saved")]
+    return {
+        "path": str(repo),
+        "saved": saved_count,
+        "failed": len(failures),
+        "results": results,
+        "errors": failures,
+        "summary_completion": worklist_state["summary_completion"],
+        "summary_worklist": worklist_state["summary_worklist"],
+        "summaries_complete": worklist_state["summaries_complete"],
+    }
 
 
 @mcp.tool
