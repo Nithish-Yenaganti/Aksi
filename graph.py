@@ -126,13 +126,6 @@ def candidate_paths_for_import(module: str, importer_path: str, all_paths: set[s
     return [item for item in expanded if item in all_paths]
 
 
-def resolve_import_target(module: str, importer_path: str, all_paths: set[str]) -> str | None:
-    target_path = resolve_import_path(module, importer_path, all_paths)
-    if target_path:
-        return file_id(target_path)
-    return None
-
-
 def resolve_import_path(module: str, importer_path: str, all_paths: set[str]) -> str | None:
     candidates = candidate_paths_for_import(module, importer_path, all_paths)
     if candidates:

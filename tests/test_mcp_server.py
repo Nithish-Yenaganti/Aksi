@@ -27,6 +27,10 @@ def test_mcp_helpers_return_expected_shapes(tmp_path: Path) -> None:
     assert scan_summary["summary_completion"]["remaining"] == len(scan_summary["summary_worklist"])
     assert scan_summary["summary_completion"]["viewer_state"] == "graph_ready_summaries_pending"
     assert scan_summary["summaries_complete"] is False
+    assert scan_summary["model_refinement"]["architecture_required"] is True
+    assert scan_summary["model_refinement"]["runtime_required"] is True
+    assert scan_summary["model_refinement"]["complete"] is False
+    assert scan_summary["model_refinement"]["source"] == "local_candidates_need_host_refinement"
     root_target = next(target for target in scan_summary["summary_targets"]["structure"] if target["node_id"] == graph["root"])
     file_target = next(target for target in scan_summary["summary_targets"]["structure"] if target["node_id"] == file_node["id"])
     assert root_target["needs_summary"] is True
@@ -220,7 +224,8 @@ def test_stop_viewer_closes_running_viewer_server(tmp_path: Path) -> None:
 
 
 def test_host_refined_models_are_saved_and_embedded_in_viewer(tmp_path: Path) -> None:
-    (tmp_path / "app.py").write_text("def run():\n    return 1\n", encoding="utf-8")
+    source = tmp_path / "app.py"
+    source.write_text("def run():\n    return 1\n", encoding="utf-8")
     mcp_server.generate_visualization(str(tmp_path))
     model = {
         "nodes": [
@@ -243,13 +248,41 @@ def test_host_refined_models_are_saved_and_embedded_in_viewer(tmp_path: Path) ->
     }
 
     saved = mcp_server.save_architecture_model(model, str(tmp_path))
+    runtime_model = {
+        "nodes": [
+            {"id": "runtime:start", "name": "Start", "type": "runtime_step"},
+            {"id": "runtime:finish", "name": "Finish", "type": "runtime_step"},
+        ],
+        "edges": [{"source": "runtime:start", "target": "runtime:finish", "label": "then"}],
+    }
+    runtime_saved = mcp_server.save_runtime_model(runtime_model, str(tmp_path))
     models = mcp_server.get_models(str(tmp_path))
+    refreshed = mcp_server.generate_visualization(str(tmp_path), serve_viewer=False)
     viewer = (tmp_path / "Files" / "index.html").read_text(encoding="utf-8")
 
     assert saved["saved"] is True
+    assert runtime_saved["saved"] is True
+    assert "source_graph_hash" in saved["model"]
+    assert "source_graph_hash" in runtime_saved["model"]
     assert models["models"]["architecture"]["nodes"][0]["name"] == "Entry Layer"
+    assert models["models"]["runtime"]["nodes"][0]["name"] == "Start"
+    assert refreshed["model_refinement"]["complete"] is True
+    assert refreshed["model_refinement"]["architecture_required"] is False
+    assert refreshed["model_refinement"]["runtime_required"] is False
+    assert refreshed["model_refinement"]["current_models"] == {"architecture": True, "runtime": True}
+    assert refreshed["model_refinement"]["stale_models"] == {"architecture": False, "runtime": False}
     assert "Entry Layer" in viewer
     assert "__AKSI_MODELS__" in viewer
+
+    source.write_text("def run():\n    return 2\n", encoding="utf-8")
+    changed = mcp_server.generate_visualization(str(tmp_path), serve_viewer=False)
+
+    assert changed["model_refinement"]["complete"] is False
+    assert changed["model_refinement"]["architecture_required"] is True
+    assert changed["model_refinement"]["runtime_required"] is True
+    assert changed["model_refinement"]["saved_models"] == {"architecture": True, "runtime": True}
+    assert changed["model_refinement"]["current_models"] == {"architecture": False, "runtime": False}
+    assert changed["model_refinement"]["stale_models"] == {"architecture": True, "runtime": True}
 
 
 def test_refined_model_rejects_bad_edges(tmp_path: Path) -> None:
@@ -288,9 +321,13 @@ def test_generate_visualization_returns_host_llm_summary_targets(tmp_path: Path)
     assert result["next_steps"][0].startswith("Inspect summary_mode")
     assert "graph-only previews" in " ".join(result["next_steps"])
     assert "do not clear summary_worklist" in " ".join(result["next_steps"])
+    assert "Verify each summary matches the exact get_context node" in " ".join(result["next_steps"])
+    assert "model_refinement" in result
+    assert "After summaries are current, inspect model_refinement" in " ".join(result["next_steps"])
     assert "grounded get_map/get_context" in " ".join(result["refinement_workflow"])
     assert "Refined models do not clear summary_worklist" in " ".join(result["refinement_workflow"])
     assert "summary_worklist" in " ".join(result["summary_workflow"])
+    assert "verify_summary_matches_context" in " ".join(result["summary_workflow"])
     assert result["summary_worklist"]
     assert len({target["node_id"] for target in result["summary_worklist"]}) == len(result["summary_worklist"])
     assert set(result["summary_schema"]) == {

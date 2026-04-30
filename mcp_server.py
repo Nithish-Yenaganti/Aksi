@@ -402,6 +402,51 @@ def _read_models(repo: Path) -> dict[str, Any]:
     return payload
 
 
+def _architecture_fingerprint(architecture: dict[str, Any]) -> str:
+    nodes = architecture.get("nodes", {})
+    payload = {
+        "root": architecture.get("root"),
+        "nodes": [
+            {
+                "id": node_id,
+                "type": node.get("type"),
+                "path": node.get("path"),
+                "name": node.get("name"),
+                "hash": node.get("hash"),
+                "children": node.get("children", []),
+            }
+            for node_id, node in sorted(nodes.items())
+        ],
+        "edges": [
+            {
+                "type": edge.get("type"),
+                "source": edge.get("source"),
+                "target": edge.get("target"),
+                "import_text": edge.get("import_text"),
+            }
+            for edge in sorted(
+                architecture.get("edges", []),
+                key=lambda item: (
+                    item.get("source", ""),
+                    item.get("target", ""),
+                    item.get("type", ""),
+                    item.get("import_text", ""),
+                ),
+            )
+        ],
+        "components": [
+            {
+                "id": component.get("id"),
+                "name": component.get("name"),
+                "files": sorted(component.get("files", [])),
+            }
+            for component in sorted(architecture.get("components", []), key=lambda item: item.get("id", ""))
+        ],
+    }
+    encoded = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
+
+
 def _validate_refined_model(model: Any, model_type: str) -> dict[str, Any]:
     if not isinstance(model, dict):
         raise TypeError("model must be a JSON object")
@@ -458,11 +503,13 @@ def _validate_refined_model(model: Any, model_type: str) -> dict[str, Any]:
 
 def _save_refined_model(repo: Path, model_type: str, model: Any) -> dict[str, Any]:
     normalized = _validate_refined_model(model, model_type)
+    architecture = refresh_stale_flags(load_architecture(repo), repo)
+    normalized["source_graph_hash"] = _architecture_fingerprint(architecture)
     payload = _read_models(repo)
     payload["generated_at"] = _utc_now()
     payload.setdefault("models", {})[model_type] = normalized
     _models_path(repo).write_text(json.dumps(payload, indent=2), encoding="utf-8")
-    _write_static_viewer(repo, refresh_stale_flags(load_architecture(repo), repo))
+    _write_static_viewer(repo, architecture)
     return {"saved": True, "model_type": model_type, "models_file": str(_models_path(repo)), "model": normalized}
 
 
@@ -655,6 +702,48 @@ def _summary_completion(worklist: list[dict[str, Any]]) -> dict[str, Any]:
     }
 
 
+def _model_refinement_status(repo: Path, architecture: dict[str, Any]) -> dict[str, Any]:
+    models = _read_models(repo).get("models", {})
+    source_graph_hash = _architecture_fingerprint(architecture)
+    architecture_model = models.get("architecture")
+    runtime_model = models.get("runtime")
+    has_architecture = isinstance(architecture_model, dict)
+    has_runtime = isinstance(runtime_model, dict)
+    architecture_current = has_architecture and architecture_model.get("source_graph_hash") == source_graph_hash
+    runtime_current = has_runtime and runtime_model.get("source_graph_hash") == source_graph_hash
+    return {
+        "source": "local_candidates_need_host_refinement",
+        "source_graph_hash": source_graph_hash,
+        "architecture_required": not architecture_current,
+        "runtime_required": not runtime_current,
+        "complete": architecture_current and runtime_current,
+        "saved_models": {
+            "architecture": has_architecture,
+            "runtime": has_runtime,
+        },
+        "current_models": {
+            "architecture": architecture_current,
+            "runtime": runtime_current,
+        },
+        "stale_models": {
+            "architecture": has_architecture and not architecture_current,
+            "runtime": has_runtime and not runtime_current,
+        },
+        "local_candidates": {
+            "architecture_components": len(architecture.get("components", [])),
+            "runtime_dependency_edges": len(architecture.get("edges", [])),
+        },
+        "required_action": (
+            "After summaries are current, use get_map and get_context to write or refresh grounded architecture "
+            "and runtime/input-flow models, then call save_architecture_model and save_runtime_model."
+        ),
+        "note": (
+            "Structure is the concrete scanned graph. Architecture and Runtime are local static candidates "
+            "until current host-refined models are saved."
+        ),
+    }
+
+
 def _scan_repository(
     repo: Path,
     preserved_summary_records: dict[str, Any] | None = None,
@@ -694,6 +783,7 @@ def generate_visualization(
     summary_worklist = _summary_worklist(summary_targets)
     summary_status = _summary_status(summary_targets, summary_worklist)
     summary_completion = _summary_completion(summary_worklist)
+    model_refinement = _model_refinement_status(repo, architecture)
     viewer_file = _write_static_viewer(repo, architecture)
     viewer_http_url = None
     viewer_http_error = None
@@ -714,6 +804,7 @@ def generate_visualization(
         "summary_status": summary_status,
         "summary_completion": summary_completion,
         "summaries_complete": summary_completion["complete"],
+        "model_refinement": model_refinement,
         "summary_mode": "host_llm_worklist" if should_prepare_summaries else "disabled",
         "summary_behavior": {
             "automatic_summaries": False,
@@ -725,6 +816,7 @@ def generate_visualization(
             "for target in summary_worklist:",
             "    context = get_context(target['node_id'], path)",
             "    summary = host_llm_write_summary(context)",
+            "    verify_summary_matches_context(summary, context)",
             "    save_summary(target['node_id'], summary, path)",
         ],
         "summary_schema": {
@@ -739,6 +831,7 @@ def generate_visualization(
         },
         "refinement_workflow": [
             "Use local Architecture and Runtime Flow as candidates only.",
+            "Complete summary_worklist first; summaries and model refinement are separate loops.",
             "Call get_map(path) and get_context(node_id, path) for repo root and important files/components.",
             "Host LLM may refine labels and grouping only from grounded get_map/get_context evidence.",
             "Host LLM calls save_architecture_model(model, path) for an optional grounded architecture model.",
@@ -769,9 +862,11 @@ def generate_visualization(
             "Inspect summary_mode, summary_completion, and summary_worklist before presenting the viewer as complete.",
             "Treat summary_worklist as the executable queue; do not iterate summary_targets directly for required work.",
             "If summary_completion.required is true, call get_context for every summary_worklist item and write grounded host-LLM summaries.",
+            "Verify each summary matches the exact get_context node, path, type, source, edges, neighbors, and context limits; re-summarize mismatches before saving.",
             "Call save_summary for each written explanation, then re-check completion with get_summary_worklist or generate_visualization.",
             "Only say saved rectangle summaries are current when summary_mode is host_llm_worklist and refreshed summary_completion.complete is true.",
             "If summary_mode is disabled, say the graph is ready without summary targets.",
+            "After summaries are current, inspect model_refinement; if architecture_required or runtime_required is true, write grounded refined models from get_map/get_context.",
             "Give viewer_http_url when present; otherwise give viewer_url, labeling early links as graph-only previews when summaries remain pending.",
             "Use save_architecture_model and save_runtime_model only for optional grounded refinements; they do not clear summary_worklist.",
         ],

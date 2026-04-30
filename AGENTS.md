@@ -19,15 +19,19 @@ When a user asks to visualize, refresh, inspect, or explain a project through Ak
 for target in summary_worklist:
   context = get_context(target.node_id, path)
   summary = write_summary_from_context(context)
+  verify_summary_matches_context(summary, context)
   save_summary(target.node_id, summary, path)
 ```
 
-5. If any summaries were saved, re-check with `get_summary_worklist(path)` or `generate_visualization(path, prepare_summary_targets=True)`.
-6. Use the refreshed `summary_completion` for the final status. If no summary work was required, use the original `summary_completion`.
-7. Give the user the `viewer_http_url` from the latest `generate_visualization` response when it exists; otherwise give `viewer_url`. If the re-check used `get_summary_worklist(path)`, reuse the URL from the prior `generate_visualization` response. Include an accurate status:
+5. If verification finds a summary that does not match the node name, type, source, path, dependencies, or role from `get_context`, rewrite that summary from the same context before saving it.
+6. If any summaries were saved, re-check with `get_summary_worklist(path)` or `generate_visualization(path, prepare_summary_targets=True)`.
+7. Use the refreshed `summary_completion` for the summary status. If no summary work was required, use the original `summary_completion`.
+8. After summaries are current, inspect `model_refinement`. If `architecture_required` or `runtime_required` is `true`, build or refresh grounded refined models from `get_map` and relevant `get_context` output, then call `save_architecture_model(model, path)` and/or `save_runtime_model(model, path)`.
+9. Give the user the `viewer_http_url` from the latest `generate_visualization` response when it exists; otherwise give `viewer_url`. If the re-check used `get_summary_worklist(path)`, reuse the URL from the prior `generate_visualization` response. Include an accurate status:
    - if `summary_mode` is `host_llm_worklist` and refreshed `summary_completion.complete` is `true`, say the graph and saved rectangle summaries are current;
    - if `summary_mode` is `disabled`, say the graph is ready without summary targets;
    - if refreshed `summary_completion.required` is `true`, say this is an early graph-only preview and summaries are still pending.
+   - if `model_refinement.complete` is not `true`, say Architecture and Runtime are still local static candidates until current host-refined models are saved.
 
 Never present the viewer as complete while `summary_completion.required` is `true`. A generated `Files/index.html` means the graph exists; it does not mean rectangle summaries are finished.
 
@@ -46,6 +50,7 @@ Do not ask the user to run `aksi.py` manually when MCP tools are available.
 - returns `summary_targets` grouped by viewer area;
 - returns a deduplicated `summary_worklist` containing only missing or stale nodes;
 - returns `summary_completion` describing whether host-written summary work remains.
+- returns `model_refinement` describing whether Architecture and Runtime still need host-refined models.
 
 Aksi does not call an LLM and does not write summaries by itself. `summarize=True` is only a compatibility name for preparing host work items. Prefer `prepare_summary_targets=True` in MCP clients.
 
@@ -60,6 +65,8 @@ fresh   -> action: skip
 On the first run, process every item in `summary_worklist`. On later runs, process every returned worklist item; fresh summaries are preserved and omitted from the worklist.
 
 `save_summary` stores the host-written summary under `Files/context/`, updates `Files/context/index.json`, and regenerates `Files/index.html`. Only `save_summary` clears summary work; saving refined architecture or runtime models does not remove items from `summary_worklist`.
+
+Before calling `save_summary`, verify the summary against the `get_context` result. A valid summary must name the same node, describe the same node type and path, avoid unsupported callers or runtime behavior, and match the returned source, symbols, edges, neighbors, and context limits. If it does not match, re-summarize from `get_context` and verify again.
 
 Preferred summary shape:
 
@@ -76,7 +83,7 @@ Preferred summary shape:
 }
 ```
 
-Write summaries only from `get_context` output. Keep them concise and grounded. Use low confidence when context is partial, such as a component where files were omitted.
+Write summaries only from `get_context` output. Keep them concise and grounded. Use low confidence when context is partial, such as a component where files were omitted. Do not save a summary that was copied from another node or that describes a broader file/component when the selected rectangle is a specific function, class, external dependency, or folder.
 
 ## Viewer Coverage
 
@@ -97,9 +104,25 @@ Architecture and Runtime Flow tabs start with local Aksi candidates. The host LL
 - `save_architecture_model(model, path)` for a project architecture model.
 - `save_runtime_model(model, path)` for a runtime/input-flow model.
 
-Saved host-refined models are preferred by the viewer. Local components and dependency flow remain fallback candidates. Refined models are optional and are not a substitute for processing `summary_worklist`; only `save_summary` clears summary work.
+Current host-refined models are preferred by the viewer. Local components and dependency flow remain fallback candidates. Refined models are optional and are not a substitute for processing `summary_worklist`; only `save_summary` clears summary work.
+
+Aksi stores a source graph hash with each refined model. If the repo graph changes later, `model_refinement.stale_models` marks saved models stale and sets `architecture_required` or `runtime_required` back to `true`. In that case, refresh the model from current `get_map`/`get_context` output before calling the Architecture or Runtime tabs complete.
 
 Mark uncertainty in refined models. Do not add unsupported components, flows, callers, dependencies, or runtime behavior.
+
+Use this refinement loop after `summary_completion.complete` is `true`:
+
+```text
+map = get_map(path)
+repo_context = get_context(map.root, path)
+important_contexts = get_context(important_file_or_component_id, path)
+architecture_model = write_grounded_architecture_model(map, repo_context, important_contexts)
+runtime_model = write_grounded_runtime_model(map, repo_context, important_contexts)
+save_architecture_model(architecture_model, path)
+save_runtime_model(runtime_model, path)
+```
+
+Do not call Architecture or Runtime complete when `model_refinement.architecture_required` or `model_refinement.runtime_required` is `true`. The local candidate diagrams are useful previews, but they are not the current host-understood architecture/runtime model.
 
 ## Generated Output
 

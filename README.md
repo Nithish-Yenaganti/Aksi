@@ -112,12 +112,14 @@ Normal MCP workflow:
 1. The user asks their LLM host to add or inspect the visualization.
 2. The host calls `generate_visualization(path, prepare_summary_targets=True, serve_viewer=True)`; users do not need to run `aksi.py`.
 3. The host gives the user `viewer_http_url` when present, otherwise `viewer_url`.
-4. The response includes grouped `summary_targets`, a deduplicated `summary_worklist`, `summary_status` counts, and `summary_completion`.
+4. The response includes grouped `summary_targets`, a deduplicated `summary_worklist`, `summary_status` counts, `summary_completion`, and `model_refinement`.
 5. If `summary_completion.required` is `true`, the graph is ready but rectangle summaries are still pending.
 6. For each item in `summary_worklist`, the host calls `get_context` and uses its own LLM to write the summary.
-7. The host calls `save_summary` for each written explanation so the viewer can show it when that rectangle is clicked.
-8. Aksi stores summaries under `Files/context/`, updates `Files/context/index.json`, and regenerates `Files/index.html`.
-9. On the next run, Aksi preserves fresh summaries, marks changed context as stale, and returns only stale or missing targets as needing work.
+7. The host verifies each summary against the exact returned node, source, symbols, edges, neighbors, and context limits; mismatches must be re-summarized before saving.
+8. The host calls `save_summary` for each verified explanation so the viewer can show it when that rectangle is clicked.
+9. Aksi stores summaries under `Files/context/`, updates `Files/context/index.json`, and regenerates `Files/index.html`.
+10. After summaries are current, the host checks `model_refinement`; if Architecture or Runtime refinement is missing or stale, it writes grounded models from current `get_map`/`get_context` and saves them with `save_architecture_model` and `save_runtime_model`.
+11. On the next run, Aksi preserves fresh summaries, marks changed context as stale, and returns only stale or missing targets as needing work.
 
 Aksi never calls an external LLM directly. It scans, builds the graph, detects stale files, marks unused-code hints, returns summary targets, preserves saved summaries, and writes the UI locally. The connected host LLM owns the language-writing step. To skip summary targets for a local run, use `python aksi.py --no-summarize`.
 
@@ -133,6 +135,7 @@ Host summary loop:
 for target in summary_worklist:
   context = get_context(target.node_id, path)
   summary = write_summary_from_context(context)
+  verify_summary_matches_context(summary, context)
   save_summary(target.node_id, summary, path)
 ```
 
@@ -143,6 +146,19 @@ for target in summary_worklist:
 - `runtime`: current static dependency-flow file/external rectangles, not traced runtime execution.
 
 The Architecture and Runtime Flow tabs start with local Aksi candidates. For final output, the host LLM should read Aksi context and save refined models with `save_architecture_model` and `save_runtime_model`; the viewer prefers those saved models when available.
+
+`model_refinement` tells the host whether those refined models are still missing:
+
+```json
+{
+  "architecture_required": true,
+  "runtime_required": true,
+  "complete": false,
+  "source": "local_candidates_need_host_refinement"
+}
+```
+
+Saved refined models include a source graph hash. If code or dependencies change, `model_refinement.stale_models` marks outdated models stale and sets the required flags back to `true`.
 
 Recommended summary format:
 
