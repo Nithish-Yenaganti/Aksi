@@ -14,9 +14,11 @@ def test_mcp_helpers_return_expected_shapes(tmp_path: Path) -> None:
 
     assert scan_summary["summary"]["files"] == 1
     assert scan_summary["viewer_file"].endswith("Files/index.html")
-    assert scan_summary["viewer_url"].startswith("file://")
-    assert "viewer_http_url" in scan_summary
-    assert "viewer_http_error" in scan_summary
+    assert scan_summary["viewer_url"] is None
+    assert scan_summary["viewer_http_url"] is None
+    assert scan_summary["viewer_http_error"] == "withheld_until_summary_and_model_refinement_complete"
+    assert scan_summary["viewer_release"]["complete"] is False
+    assert scan_summary["viewer_release"]["withheld"] is True
     assert scan_summary["summary_mode"] == "host_llm_worklist"
     assert scan_summary["summary_behavior"]["automatic_summaries"] is False
     assert scan_summary["summary_behavior"]["written_by_aksi"] == 0
@@ -319,7 +321,7 @@ def test_generate_visualization_returns_host_llm_summary_targets(tmp_path: Path)
     assert "file:graph.py" in runtime_ids
     assert "save_summary" in " ".join(result["next_steps"])
     assert result["next_steps"][0].startswith("Inspect summary_mode")
-    assert "graph-only previews" in " ".join(result["next_steps"])
+    assert "viewer_http_url and viewer_url are withheld" in " ".join(result["next_steps"])
     assert "do not clear summary_worklist" in " ".join(result["next_steps"])
     assert "Verify each summary matches the exact get_context node" in " ".join(result["next_steps"])
     assert "model_refinement" in result

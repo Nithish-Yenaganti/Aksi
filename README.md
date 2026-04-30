@@ -111,7 +111,7 @@ Normal MCP workflow:
 
 1. The user asks their LLM host to add or inspect the visualization.
 2. The host calls `generate_visualization(path, prepare_summary_targets=True, serve_viewer=True)`; users do not need to run `aksi.py`.
-3. The host gives the user `viewer_http_url` when present, otherwise `viewer_url`.
+3. Aksi withholds `viewer_http_url`/`viewer_url` until summaries and required model refinement are complete; the host should keep working from `summary_worklist` and `model_refinement` instead of stopping at `viewer_file`.
 4. The response includes grouped `summary_targets`, a deduplicated `summary_worklist`, `summary_status` counts, `summary_completion`, and `model_refinement`.
 5. If `summary_completion.required` is `true`, the graph is ready but rectangle summaries are still pending.
 6. For each item in `summary_worklist`, the host calls `get_context` and uses its own LLM to write the summary.

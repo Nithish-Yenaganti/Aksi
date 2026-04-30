@@ -785,19 +785,31 @@ def generate_visualization(
     summary_completion = _summary_completion(summary_worklist)
     model_refinement = _model_refinement_status(repo, architecture)
     viewer_file = _write_static_viewer(repo, architecture)
+    summaries_ready = summary_completion["complete"] or not should_prepare_summaries
+    workflow_complete = summaries_ready and bool(model_refinement["complete"])
     viewer_http_url = None
     viewer_http_error = None
-    if serve_viewer:
+    viewer_url = viewer_file.as_uri() if workflow_complete else None
+    if serve_viewer and workflow_complete:
         try:
             viewer_http_url = _viewer_http_url(repo)
         except OSError as error:
             viewer_http_error = str(error)
+    elif not workflow_complete:
+        viewer_http_error = "withheld_until_summary_and_model_refinement_complete"
     return {
         **result,
         "viewer_file": str(viewer_file),
-        "viewer_url": viewer_file.as_uri(),
+        "viewer_url": viewer_url,
         "viewer_http_url": viewer_http_url,
         "viewer_http_error": viewer_http_error,
+        "viewer_release": {
+            "complete": workflow_complete,
+            "withheld": not workflow_complete,
+            "reason": None
+            if workflow_complete
+            else "summary_worklist and model_refinement must be complete before returning a viewer URL.",
+        },
         "summary_index_file": str(_summary_index_path(repo)),
         "summary_targets": summary_targets,
         "summary_worklist": summary_worklist,
@@ -867,7 +879,7 @@ def generate_visualization(
             "Only say saved rectangle summaries are current when summary_mode is host_llm_worklist and refreshed summary_completion.complete is true.",
             "If summary_mode is disabled, say the graph is ready without summary targets.",
             "After summaries are current, inspect model_refinement; if architecture_required or runtime_required is true, write grounded refined models from get_map/get_context.",
-            "Give viewer_http_url when present; otherwise give viewer_url, labeling early links as graph-only previews when summaries remain pending.",
+            "viewer_http_url and viewer_url are withheld until summaries and required model refinement are complete; do not stop at viewer_file.",
             "Use save_architecture_model and save_runtime_model only for optional grounded refinements; they do not clear summary_worklist.",
         ],
     }
