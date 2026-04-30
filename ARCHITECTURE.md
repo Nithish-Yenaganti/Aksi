@@ -1,264 +1,183 @@
-# Aksi Architecture Design
+# Aksi Architecture
 
 ## Purpose
 
-Aksi is a local, private codebase visualization tool. It scans a repository, builds a generated architecture map, exposes that map to MCP-capable AI hosts, and renders the result in a static browser UI.
+Aksi is a local-first codebase visualization and MCP context tool. It scans a repository on disk, builds a static graph of files/symbols/imports, writes generated artifacts under `Files/`, and lets an MCP host add grounded summaries and refined Architecture/Runtime models.
 
-The core rule is simple: structural truth comes from local static analysis, not from LLM guesses.
+The boundary is intentional:
 
-## System Overview
+- Aksi owns local structural facts.
+- The host LLM owns natural-language summaries and final Architecture/Runtime interpretation.
+- Generated output stays inside the scanned repo under `Files/`.
 
-```text
-User / LLM Host
-      |
-      v
-  aksi.py or MCP tool
-      |
-      v
-  scanner.py
-      |
-      v
-  graph.py
-      |
-      v
-  Files/architecture.json
-      |
-      +--------------------+
-      |                    |
-      v                    v
-ui/index.html        mcp_server.py
-D3 viewer            FastMCP stdio tools
-```
-
-## Main Components
-
-### `aksi.py`
-
-`aksi.py` is the one-command local runner.
-
-It can:
-
-- scan the target repository
-- write `Files/architecture.json`
-- run tests with `--test`
-- start a local static server for the UI
-
-This is the command normal users should run when using Aksi directly.
-
-### `scanner.py`
-
-`scanner.py` is the local indexing layer.
-
-It:
-
-- walks source files in the target repo
-- skips generated and dependency directories such as `.git`, `.venv`, `node_modules`, and `Files`
-- computes SHA-256 hashes per scanned file
-- extracts symbols such as functions, classes, interfaces, structs, and types
-- extracts imports/includes as dependency candidates
-- stores hash cache data in `Files/.aksi_cache*`
-
-Tree-sitter is preferred when available. Conservative fallback parsing is used when a language grammar is missing.
-
-### `graph.py`
-
-`graph.py` converts scanner output into the generated architecture map.
-
-It builds:
-
-- repo, folder, file, and symbol nodes
-- parent-child hierarchy edges
-- import/dependency edges
-- external dependency nodes for unresolved imports
-- stale flags when files change
-- possible unused/dead-code markers
-
-The main output is:
+## System Flow
 
 ```text
-Files/architecture.json
+User or MCP host
+  -> generate_visualization / aksi
+  -> scanner.py
+  -> graph.py
+  -> Files/architecture.json + Files/index.html
+  -> host summary/model loop through mcp_server.py
+  -> Files/context/*.json + Files/context/models.json
+  -> static UI shows current graph, summaries, and refined models
 ```
 
-### `mcp_server.py`
+## Main Modules
 
-`mcp_server.py` exposes Aksi through FastMCP stdio.
+`scanner.py`
 
-It lets an AI host call local tools instead of doing heavy repo analysis by itself.
+- Walks supported source files.
+- Skips generated/vendor/cache directories such as `.git`, `.venv`, `node_modules`, and `Files`.
+- Computes SHA-256 file hashes.
+- Extracts symbols and imports with Tree-sitter when available.
+- Uses conservative fallbacks when grammars are unavailable.
+- Stores scan cache data in `Files/.aksi_cache*`.
 
-Current MCP tools:
+`graph.py`
 
-- `generate_visualization(path=".", summarize=True, prepare_summary_targets=None, serve_viewer=True)`
-- `scan_repo(path=".")`
-- `get_map(path=".")`
-- `get_summary_worklist(path=".")`
-- `get_context(node_id, path=".")`
-- `save_summary(node_id, summary, path=".")`
-- `get_summary(node_id, path=".")`
-- `list_summaries(path=".")`
-- `save_architecture_model(model, path=".")`
-- `save_runtime_model(model, path=".")`
-- `get_models(path=".")`
-- `stop_viewer(path=".")`
+- Converts scanner output into `Files/architecture.json`.
+- Builds repo, folder, file, symbol, external, and component nodes.
+- Resolves local imports where possible.
+- Creates import/dependency edges.
+- Marks stale files from hash changes.
+- Adds conservative unused-file and unused-symbol hints.
+- Builds local Architecture and Runtime candidates, not final LLM-refined models.
 
-The MCP server does not scan by asking an LLM. It calls Aksi’s local scanner and graph builder.
+`mcp_server.py`
 
-### `ui/index.html`
+- Exposes the FastMCP stdio server.
+- Generates visualizations and serves the static viewer.
+- Returns compact workflow status for agents.
+- Returns summary worklists and source context.
+- Saves host-written summaries and refined models.
+- Regenerates `Files/index.html` only on write operations such as visualization generation, summary saves, and model saves.
 
-`ui/index.html` is the static D3 viewer.
+`ui/index.html`
 
-It loads:
+- Static D3 viewer template.
+- Copied into each scanned repo as `Files/index.html`.
+- Supports Structure, Architecture, and Runtime Flow views.
+- Uses saved summaries from `Files/context/index.json`.
+- Uses host-refined models from `Files/context/models.json` when available.
+- Falls back to local static candidates when refined models are missing or stale.
+
+`aksi.py`
+
+- One-command local runner.
+- Calls the same generation path as MCP.
+- Serves `Files/index.html` from a local HTTP server.
+- Exposes `--scan-only`, `--no-summarize`, and `--test`.
+
+## MCP Workflow
+
+The current agent workflow is status-driven:
 
 ```text
-../Files/architecture.json
-../Files/context/index.json
+generate_visualization(path, prepare_summary_targets=True, response_mode="compact")
+get_workflow_status(path, response_mode="compact")
+
+if next_action == "summarize_batch":
+  get_summary_context_bundle(path, limit=...)
+  host writes verified summaries
+  save_summaries(items, path)
+  repeat get_workflow_status
+
+if next_action == "refine_models":
+  get_model_seed(path)
+  get_map(path) and context calls as needed
+  host writes architecture/runtime models
+  save_architecture_model(model, path)
+  save_runtime_model(model, path)
+  repeat get_workflow_status
+
+if next_action == "release_viewer":
+  share viewer.viewer_http_url or viewer.viewer_url
 ```
 
-It currently renders three views:
+The viewer link is intentionally withheld until summaries and required model refinement are complete, unless the user explicitly asks for a graph-only preview.
 
-- `Structure`: full repo tree with folders, files, and symbols
-- `Architecture`: host-refined project architecture when saved; otherwise local component candidates
-- `Runtime Flow`: host-refined input/process flow when saved; otherwise static import/dependency-flow projection
+## Summary System
 
-Clicking a rectangle opens a detail card with:
+Summaries are host-written, not Aksi-written.
 
-- concise summary
-- responsibility
-- how it works
-- relationships or change risk
-- saved LLM summary when available
-
-### `Files/`
-
-`Files/` is generated output inside the scanned repository.
-
-It may contain:
+The summary lifecycle is:
 
 ```text
-Files/architecture.json
-Files/.aksi_cache*
-Files/context/index.json
-Files/context/*.json
+summary_targets -> summary_worklist -> get_context/get_context_batch
+-> host LLM summary -> save_summary/save_summaries
+-> Files/context/*.json -> Files/context/index.json -> Files/index.html
 ```
 
-This folder should stay ignored by git.
+Fresh summaries are preserved between scans. Changed source hashes mark affected summaries stale. Later runs should process only missing or stale worklist items.
 
-### `tests/`
-
-`tests/` protects scanner, graph, and MCP helper behavior.
-
-Current test areas:
-
-- symbol and import extraction
-- ignored directory behavior
-- changed/stale file detection
-- folder/file/symbol graph nesting
-- local import resolution
-- possible unused-code markers
-- MCP tool return shapes
-
-## Data Flow
-
-```text
-1. User runs Aksi or an LLM host calls an MCP tool.
-2. Aksi scans the target repo locally.
-3. The scanner extracts files, hashes, symbols, and imports.
-4. The graph builder creates nodes, edges, stale flags, and unused-code hints.
-5. Aksi writes Files/architecture.json.
-6. The UI reads architecture.json and renders visual diagrams.
-7. The MCP server returns summary targets for rectangles that are missing or stale.
-8. The LLM host fetches exact context for those targets with `get_context`.
-9. The LLM host saves summaries back into `Files/context/`.
-10. Aksi updates `Files/context/index.json` and regenerates `Files/index.html`.
-```
-
-## Generated JSON Shape
-
-`Files/architecture.json` has this top-level shape:
+Preferred summary shape:
 
 ```json
 {
-  "root": "repo:.",
-  "nodes": {},
-  "edges": [],
-  "generated_at": "timestamp",
-  "scanner": {},
-  "analysis": {}
+  "purpose": "...",
+  "behavior": "...",
+  "interfaces": "...",
+  "dependencies": "...",
+  "used_by": "...",
+  "change_risk": "...",
+  "open_questions": "...",
+  "confidence": "..."
 }
 ```
 
-Nodes can represent:
+## Architecture And Runtime Models
 
-- `repo`
-- `folder`
-- `file`
-- `function`
-- `class`
-- `interface`
-- `struct`
-- `type`
-- `external`
+Structure is always local and concrete.
 
-Edges currently represent imports/dependencies.
+Architecture and Runtime Flow start as local candidates, then the host LLM can refine them:
 
-## Dead-Code Marking
+- `get_model_seed(path)` returns compact local facts for refinement.
+- `save_architecture_model(model, path)` stores the host-refined architecture.
+- `save_runtime_model(model, path)` stores the host-refined runtime/input-flow model.
 
-Aksi marks possible dead code with local static-analysis hints.
+Saved refined models include a source graph hash. If the graph changes, Aksi marks models stale and requires refresh before the viewer is considered complete again.
 
-Files are marked possibly unused when no local file imports them and they are not likely entrypoints.
+Runtime Flow is not traced execution. It is a cautious dependency/input-flow model grounded in static graph facts and host context review.
 
-Symbols are marked possibly unused when no local reference is found outside their declaration line.
+## Generated Files
 
-These markers are useful for visual triage, but they are not runtime proof. Dynamic calls, framework entrypoints, decorators, plugins, reflection, shell commands, and external users can make code live even when local references are not obvious.
-
-## MCP Agent Workflow
-
-When connected to an MCP host, the intended workflow is:
+Aksi writes generated artifacts into the scanned repository:
 
 ```text
-User asks host to visualize or explain a repo
-      |
-      v
-Host calls generate_visualization(path, prepare_summary_targets=True, serve_viewer=True)
-      |
-      v
-Aksi scans locally, preserves summaries, writes architecture.json and index.html
-      |
-      v
-Host opens viewer URL and reads summary_targets
-      |
-      v
-Host loops over structure, architecture, and runtime targets where needs_summary is true
-      |
-      v
-Host writes grounded summaries
-      |
-      v
-Host calls save_summary(node_id, summary, path)
-      |
-      v
-User clicks rectangles and sees saved summaries
+Files/architecture.json
+Files/index.html
+Files/.aksi_cache*
+Files/context/index.json
+Files/context/*.json
+Files/context/models.json
 ```
 
-This keeps structural analysis local. The LLM host is used only for orchestration and grounded natural-language explanations.
+`Files/` is generated output and should not be committed.
 
-The host summary loop is:
+## Packaging
+
+The project exposes two installed commands:
 
 ```text
-for view in ["structure", "architecture", "runtime"]:
-  for target in summary_targets[view]:
-    if target.needs_summary is false:
-      continue
-    context = get_context(target.node_id, path)
-    summary = write_summary_from_context(context)
-    save_summary(target.node_id, summary, path)
+aksi
+aksi-mcp
 ```
 
-## Design Principles
+The viewer template is packaged as:
 
-- Local-first and private by default
-- Generated files stay under `Files/`
-- The UI stays static and easy to serve
-- The MCP bridge stays stdio-based
-- Tree-sitter or structured parsing is preferred over loose text parsing
-- LLM summaries must be grounded in exact source context from MCP tools
-- Public commands and MCP tool names should remain stable
+```text
+share/aksi/ui/index.html
+```
+
+`mcp_server.py` can load the template from either a repo checkout (`ui/index.html`) or an installed package data path.
+
+## Design Rules
+
+- Keep structural analysis local and deterministic.
+- Prefer Tree-sitter or structured parsing over regex.
+- Use regex fallbacks only for resilience.
+- Keep MCP transport stdio-based.
+- Keep the viewer static.
+- Keep public tool names stable unless a breaking change is explicitly requested.
+- Treat unused-code markers as hints, not proof.

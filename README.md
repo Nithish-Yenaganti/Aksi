@@ -1,10 +1,12 @@
 # Aksi
 
-Aksi is a local "Glass Blueprint" tool for turning source code into a zoomable architecture map. It scans a repository with Tree-sitter, writes a static `Files/architecture.json`, exposes that map through a FastMCP stdio server, and renders it with a standalone D3 viewer.
+Aksi is a local-first codebase visualization and MCP context tool. It scans a repository, builds a static blueprint of files/symbols/imports, writes a browser viewer under `Files/`, and gives MCP-capable coding agents precise context tools.
 
-The scanner is local-first: no external LLM APIs are used for indexing or relationship discovery.
+Aksi does not call an LLM. The scanner and graph builder run locally. The connected host LLM writes summaries and refined Architecture/Runtime models from Aksi-provided context.
 
-## Setup
+## Install
+
+For development from this repo:
 
 ```bash
 python -m venv .venv
@@ -12,177 +14,143 @@ python -m venv .venv
 pip install -e ".[dev]"
 ```
 
-The current MVP expects:
-
-- `fastmcp`
-- `tree-sitter`
-- `tree-sitter-python`
-- `pytest` for tests
-
-For full Tree-sitter parsing across JavaScript, TypeScript, and other languages, install the optional grammar bundle on a supported Python version:
+Optional multi-language grammar bundle:
 
 ```bash
 pip install -e ".[multilang]"
 ```
 
-The scanner automatically uses `tree-sitter-languages` when it is available. Without it, Python still uses Tree-sitter and JavaScript/TypeScript imports and symbols use conservative text fallbacks.
+Installed commands:
 
-## Scan a Repository
+```bash
+aksi
+aksi-mcp
+```
 
-The easiest way to run Aksi is:
+## Local Use
+
+Scan and serve the current repository:
 
 ```bash
 python aksi.py
 ```
 
-That single command scans the current repo, writes `Files/architecture.json`, starts a local static server, and prints the UI URL.
+Equivalent installed command:
 
-Common shortcuts:
+```bash
+aksi
+```
+
+Useful variants:
 
 ```bash
 python aksi.py --scan-only
+python aksi.py --no-summarize
 python aksi.py --test
 python aksi.py /path/to/repo --port 8080
 ```
 
-The lower-level graph command is still available:
-
-```bash
-python graph.py /path/to/repo
-```
-
-This writes:
+Aksi writes generated output into the scanned repo:
 
 ```text
-/path/to/repo/Files/architecture.json
-/path/to/repo/Files/.aksi_cache*
+Files/architecture.json
+Files/index.html
+Files/.aksi_cache*
+Files/context/index.json
+Files/context/*.json
+Files/context/models.json
 ```
 
 `Files/` is generated output and should stay ignored by git.
 
-## Run the MCP Server
+## MCP Setup
+
+Run the stdio MCP server directly:
 
 ```bash
 python mcp_server.py
 ```
 
-After installing Aksi as a package, the same server is available as:
+Equivalent installed command:
 
 ```bash
 aksi-mcp
 ```
 
-To set up the local venv and generate a client-ready MCP config snippet:
+Generate a client config snippet:
 
 ```bash
 scripts/setup_mcp.sh
-```
-
-To write the snippet to an ignored local file:
-
-```bash
 scripts/setup_mcp.sh --write-config .mcp/aksi.json
-```
-
-On macOS, this can also merge Aksi into Claude Desktop's config:
-
-```bash
 scripts/setup_mcp.sh --claude-desktop
 ```
 
-Available tools:
+## MCP Tools
 
-- `generate_visualization(path: str = ".", summarize: bool = True, prepare_summary_targets: bool | None = None, serve_viewer: bool = True, response_mode: str = "full")`
-- `get_workflow_status(path: str = ".", limit: int | None = None, prepare_summary_targets: bool = True, response_mode: str = "full")`
-- `get_model_seed(path: str = ".")`
-- `scan_repo(path: str = ".")`
-- `get_map(path: str = ".")`
-- `get_summary_worklist(path: str = ".")`
-- `get_context(node_id: str, path: str = ".")`
-- `get_context_batch(node_ids: list[str] | None = None, path: str = ".", limit: int | None = None, include_source: bool = True)`
-- `get_summary_context_bundle(path: str = ".", limit: int | None = None, include_source: bool = True)`
-- `save_summary(node_id: str, summary, path: str = ".")`
-- `save_summaries(items: list[dict], path: str = ".")`
-- `get_summary(node_id: str, path: str = ".")`
-- `list_summaries(path: str = ".")`
-- `save_architecture_model(model, path: str = ".")`
-- `save_runtime_model(model, path: str = ".")`
-- `get_models(path: str = ".")`
-- `stop_viewer(path: str = ".")`
+- `generate_visualization(path=".", summarize=True, prepare_summary_targets=None, serve_viewer=True, response_mode="full")`
+- `get_workflow_status(path=".", limit=None, prepare_summary_targets=True, response_mode="full")`
+- `get_model_seed(path=".")`
+- `scan_repo(path=".")`
+- `get_map(path=".")`
+- `get_summary_worklist(path=".")`
+- `get_context(node_id, path=".")`
+- `get_context_batch(node_ids=None, path=".", limit=None, include_source=True)`
+- `get_summary_context_bundle(path=".", limit=None, include_source=True)`
+- `save_summary(node_id, summary, path=".")`
+- `save_summaries(items, path=".")`
+- `get_summary(node_id, path=".")`
+- `list_summaries(path=".")`
+- `save_architecture_model(model, path=".")`
+- `save_runtime_model(model, path=".")`
+- `get_models(path=".")`
+- `stop_viewer(path=".")`
 
-`generate_visualization` also writes a ready local viewer. It returns a localhost URL when Aksi can start the small static viewer server, and always returns a `file://` fallback:
+Use `response_mode="compact"` for normal agent loops. Compact mode returns counts, file paths, release state, next action, and a recommended batch without large worklist/schema payloads.
 
-```text
-/path/to/repo/Files/index.html
-http://127.0.0.1:<port>/index.html
-file:///path/to/repo/Files/index.html
-```
-
-Normal MCP workflow:
-
-1. The user asks their LLM host to add or inspect the visualization.
-2. The host calls `generate_visualization(path, prepare_summary_targets=True, serve_viewer=True, response_mode="compact")`; users do not need to run `aksi.py`.
-3. The host calls `get_workflow_status(path, response_mode="compact")` and follows `next_action`, `recommended_batch`, `viewer`, and the exact `instructions`.
-4. Aksi withholds `viewer_http_url`/`viewer_url` until summaries and required model refinement are complete; `get_workflow_status` exposes the withheld reason and returns viewer URLs only when `next_action` is `release_viewer`.
-5. If `next_action` is `summarize_batch`, the host calls the tool named by `recommended_batch.tool` (`get_summary_context_bundle` by default) or `get_context_batch(path=path)` to fetch the current missing/stale worklist in one call. Use `limit` to process huge repos in chunks.
-6. The host uses its own LLM to write summaries, then verifies each summary against the exact returned node, source, symbols, edges, neighbors, and context limits; mismatches must be re-summarized before saving.
-7. The host calls `save_summaries(items, path)` for verified explanations so the viewer can show them when rectangles are clicked. `save_summary` remains available for targeted one-node workflows.
-8. After each summary save, the host calls `get_workflow_status(path)` again and keeps following its `next_action`.
-9. If `next_action` is `refine_models`, the host starts with `get_model_seed(path)`, adds source detail from current `get_map`/`get_context_batch`/`get_context` as needed, and saves grounded models with `save_architecture_model` and/or `save_runtime_model` according to the returned model status.
-10. After each model save, the host calls `get_workflow_status(path)` again. Only `release_viewer` means the viewer link is ready to share.
-11. On the next run, Aksi preserves fresh summaries, marks changed context as stale, and returns only stale or missing targets as needing work.
-
-Aksi never calls an external LLM directly. It scans, builds the graph, detects stale files, marks unused-code hints, returns summary targets, preserves saved summaries, and writes the UI locally. The connected host LLM owns the language-writing step. To skip summary targets for a local run, use `python aksi.py --no-summarize`.
-
-`summarize=True` is a compatibility name for preparing summary targets. It does not write summaries automatically. Prefer `prepare_summary_targets=True` in new MCP clients.
-
-Use `response_mode="compact"` for normal agent loops. Compact mode returns counts, generated file paths, release status, next action, and a recommended batch without the large `summary_targets`, `summary_worklist`, schema, and workflow arrays. Use the default full response only when you need those details.
-
-If a user explicitly asks for a graph without host-written summaries, call `generate_visualization(..., prepare_summary_targets=False)` and pass `prepare_summary_targets=False` to `get_workflow_status` for that run too.
-
-The viewer may be usable before summaries are complete. If `summary_completion.viewer_state` is `graph_ready_summaries_pending`, the host must complete `summary_worklist` before claiming Structure, Architecture, and Runtime rectangles have grounded explanations.
-
-On the first run, the host should complete every item in `summary_worklist`. On later runs, Aksi only puts missing or stale nodes in that worklist; fresh summaries are skipped.
-
-Host summary loop:
+## Expected MCP Workflow
 
 ```text
-status = get_workflow_status(path, limit=host_context_limit)
-while status.next_action == "summarize_batch":
-  bundle = get_summary_context_bundle(path, limit=host_context_limit)
-  items = []
-  for item in bundle.items:
-    summary = write_summary_from_context(item.context)
-    verify_summary_matches_context(summary, item.context)
-    items.append({ "node_id": item.node_id, "summary": summary })
-  save_summaries(items, path)
-  status = get_workflow_status(path, limit=host_context_limit)
+generate_visualization(path, prepare_summary_targets=True, response_mode="compact")
+get_workflow_status(path, response_mode="compact")
 ```
 
-`summary_targets` maps to the viewer tabs:
+Then follow `next_action`:
 
-- `structure`: repo, folder, file, and symbol rectangles.
-- `architecture`: detected architecture component rectangles.
-- `runtime`: current static dependency-flow file/external rectangles, not traced runtime execution.
+`summarize_batch`
 
-The Architecture and Runtime Flow tabs start with local Aksi candidates. For final output, the host LLM should call `get_model_seed(path)` for a compact grounded starting point, read additional Aksi context when needed, and save refined models with `save_architecture_model` and `save_runtime_model`; the viewer prefers those saved models when available.
-
-`get_model_seed(path)` does not call an LLM. It packages local facts for the host: component candidates, component edges, static dependency-flow edges, entrypoints, external dependencies, stale/unused hints, model-refinement status, and recommended context nodes.
-
-`model_refinement` tells the host whether those refined models are still missing:
-
-```json
-{
-  "architecture_required": true,
-  "runtime_required": true,
-  "complete": false,
-  "source": "local_candidates_need_host_refinement"
-}
+```text
+get_summary_context_bundle(path, limit=...)
+host writes and verifies summaries from returned context
+save_summaries(items, path)
+get_workflow_status(path, response_mode="compact")
 ```
 
-Saved refined models include a source graph hash. If code or dependencies change, `model_refinement.stale_models` marks outdated models stale and sets the required flags back to `true`.
+`refine_models`
 
-Recommended summary format:
+```text
+get_model_seed(path)
+get_map(path) and get_context/get_context_batch as needed
+host writes grounded Architecture and Runtime models
+save_architecture_model(model, path)
+save_runtime_model(model, path)
+get_workflow_status(path, response_mode="compact")
+```
+
+`release_viewer`
+
+```text
+share viewer.viewer_http_url when present, otherwise viewer.viewer_url
+```
+
+The viewer URL is withheld until summaries are current and required model refinement is current. A graph-only preview should be shared only when the user explicitly asks to skip the full workflow.
+
+## Summary Rules
+
+`summarize=True` and `prepare_summary_targets=True` prepare host work items. They do not write summaries.
+
+The host should summarize only missing or stale worklist items. Fresh summaries are preserved and reused.
+
+Preferred summary shape:
 
 ```json
 {
@@ -197,46 +165,43 @@ Recommended summary format:
 }
 ```
 
-On later runs, the host should use saved fresh summaries as the first layer of context. It should call `get_context` only for missing, stale, low-confidence, or task-critical nodes.
+## Viewer
 
-## View the Map
-
-The one-command runner already scans and serves the UI:
-
-```bash
-python aksi.py
-```
-
-After package installation, you can also run:
-
-```bash
-aksi
-```
-
-For manual static serving after a scan, serve the repository directory and open the UI:
-
-```bash
-python -m http.server 8000 --directory Files
-```
-
-Then open:
+The source template is:
 
 ```text
-http://localhost:8000/index.html
+ui/index.html
 ```
 
-The source viewer template lives at `ui/index.html`. The generated viewer lives at `Files/index.html`, embeds the generated map directly, and is the file users should open.
+The generated viewer is:
+
+```text
+Files/index.html
+```
+
+The viewer has three tabs:
+
+- `Structure`: repo, folders, files, and symbols from local scanning.
+- `Architecture`: host-refined model when available, otherwise local component candidates.
+- `Runtime Flow`: host-refined runtime/input-flow model when available, otherwise static dependency-flow candidates.
+
+Clicking a rectangle opens a detail panel using saved summaries first, then refined model data, then local fallback text.
 
 ## Development
 
-```bash
-pytest
-```
-
-Useful smoke checks:
+Run checks:
 
 ```bash
-python aksi.py --scan-only
-python aksi.py --test
-python -m py_compile aksi.py scanner.py graph.py mcp_server.py
+.venv/bin/python -m py_compile scanner.py graph.py mcp_server.py aksi.py
+.venv/bin/python -m pytest
 ```
+
+Build/package notes:
+
+- `pyproject.toml` defines `aksi` and `aksi-mcp` console commands.
+- The viewer template is packaged as `share/aksi/ui/index.html`.
+- `mcp_server.py` can load the viewer template from either the repo checkout or installed package data.
+
+## Privacy
+
+Aksi scans local files and writes local generated artifacts. It does not upload code and does not call external LLM APIs.
