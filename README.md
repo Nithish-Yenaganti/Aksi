@@ -86,8 +86,8 @@ scripts/setup_mcp.sh --claude-desktop
 
 Available tools:
 
-- `generate_visualization(path: str = ".", summarize: bool = True, prepare_summary_targets: bool | None = None, serve_viewer: bool = True)`
-- `get_workflow_status(path: str = ".", limit: int | None = None, prepare_summary_targets: bool = True)`
+- `generate_visualization(path: str = ".", summarize: bool = True, prepare_summary_targets: bool | None = None, serve_viewer: bool = True, response_mode: str = "full")`
+- `get_workflow_status(path: str = ".", limit: int | None = None, prepare_summary_targets: bool = True, response_mode: str = "full")`
 - `get_model_seed(path: str = ".")`
 - `scan_repo(path: str = ".")`
 - `get_map(path: str = ".")`
@@ -115,8 +115,8 @@ file:///path/to/repo/Files/index.html
 Normal MCP workflow:
 
 1. The user asks their LLM host to add or inspect the visualization.
-2. The host calls `generate_visualization(path, prepare_summary_targets=True, serve_viewer=True)`; users do not need to run `aksi.py`.
-3. The host calls `get_workflow_status(path)` and follows `next_action`, `recommended_batch`, `viewer`, and the exact `instructions`.
+2. The host calls `generate_visualization(path, prepare_summary_targets=True, serve_viewer=True, response_mode="compact")`; users do not need to run `aksi.py`.
+3. The host calls `get_workflow_status(path, response_mode="compact")` and follows `next_action`, `recommended_batch`, `viewer`, and the exact `instructions`.
 4. Aksi withholds `viewer_http_url`/`viewer_url` until summaries and required model refinement are complete; `get_workflow_status` exposes the withheld reason and returns viewer URLs only when `next_action` is `release_viewer`.
 5. If `next_action` is `summarize_batch`, the host calls the tool named by `recommended_batch.tool` (`get_summary_context_bundle` by default) or `get_context_batch(path=path)` to fetch the current missing/stale worklist in one call. Use `limit` to process huge repos in chunks.
 6. The host uses its own LLM to write summaries, then verifies each summary against the exact returned node, source, symbols, edges, neighbors, and context limits; mismatches must be re-summarized before saving.
@@ -129,6 +129,8 @@ Normal MCP workflow:
 Aksi never calls an external LLM directly. It scans, builds the graph, detects stale files, marks unused-code hints, returns summary targets, preserves saved summaries, and writes the UI locally. The connected host LLM owns the language-writing step. To skip summary targets for a local run, use `python aksi.py --no-summarize`.
 
 `summarize=True` is a compatibility name for preparing summary targets. It does not write summaries automatically. Prefer `prepare_summary_targets=True` in new MCP clients.
+
+Use `response_mode="compact"` for normal agent loops. Compact mode returns counts, generated file paths, release status, next action, and a recommended batch without the large `summary_targets`, `summary_worklist`, schema, and workflow arrays. Use the default full response only when you need those details.
 
 If a user explicitly asks for a graph without host-written summaries, call `generate_visualization(..., prepare_summary_targets=False)` and pass `prepare_summary_targets=False` to `get_workflow_status` for that run too.
 

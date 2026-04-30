@@ -344,6 +344,21 @@ def test_generate_visualization_returns_host_llm_summary_targets(tmp_path: Path)
     }
 
 
+def test_generate_visualization_compact_response_omits_large_payloads(tmp_path: Path) -> None:
+    (tmp_path / "app.py").write_text("def run():\n    return 1\n", encoding="utf-8")
+
+    result = mcp_server.generate_visualization(str(tmp_path), response_mode="compact", serve_viewer=False)
+
+    assert result["response_mode"] == "compact"
+    assert result["next_action"] == "summarize_batch"
+    assert result["recommended_batch"]["tool"] == "get_summary_context_bundle"
+    assert result["recommended_batch"]["limit"] == 15
+    assert "summary_targets" not in result
+    assert "summary_worklist" not in result
+    assert result["omitted"]["summary_targets"] is True
+    assert result["omitted"]["summary_worklist"] is True
+
+
 def test_generate_visualization_can_disable_summary_targets(tmp_path: Path) -> None:
     (tmp_path / "app.py").write_text("def run():\n    return 1\n", encoding="utf-8")
 
@@ -361,6 +376,20 @@ def test_generate_visualization_can_disable_summary_targets(tmp_path: Path) -> N
     assert status["summary"]["complete"] is True
     assert status["summary"]["remaining"] == 0
     assert status["next_action"] == "refine_models"
+
+
+def test_workflow_status_compact_omits_worklist_and_limits_batch(tmp_path: Path) -> None:
+    (tmp_path / "app.py").write_text("def run():\n    return 1\n", encoding="utf-8")
+    generated = mcp_server.generate_visualization(str(tmp_path), serve_viewer=False)
+
+    status = mcp_server.get_workflow_status(str(tmp_path), response_mode="compact")
+
+    assert status["response_mode"] == "compact"
+    assert "summary_worklist" not in status
+    assert status["summary"]["worklist_omitted"] is True
+    assert status["summary"]["work_items"] == len(generated["summary_worklist"])
+    assert status["recommended_batch"]["limit"] == 15
+    assert len(status["recommended_batch"]["node_ids"]) == min(15, len(generated["summary_worklist"]))
 
 
 def test_generate_visualization_prepare_summary_targets_alias(tmp_path: Path) -> None:
@@ -431,6 +460,24 @@ def test_get_context_batch_accepts_explicit_nodes_and_partial_errors(tmp_path: P
     assert batch["errors"] == [{"node_id": "file:missing.py", "error": "Node not found: file:missing.py"}]
     assert batch["batch"]["successes"] == 1
     assert batch["batch"]["errors"] == 1
+
+
+def test_read_only_tools_do_not_regenerate_viewer_or_index(tmp_path: Path) -> None:
+    (tmp_path / "app.py").write_text("def run():\n    return 1\n", encoding="utf-8")
+    mcp_server.generate_visualization(str(tmp_path), serve_viewer=False)
+    viewer_path = tmp_path / "Files" / "index.html"
+    index_path = tmp_path / "Files" / "context" / "index.json"
+    original_viewer = viewer_path.read_text(encoding="utf-8")
+    original_index = index_path.read_text(encoding="utf-8")
+
+    mcp_server.get_map(str(tmp_path))
+    mcp_server.get_summary_worklist(str(tmp_path))
+    mcp_server.get_workflow_status(str(tmp_path), response_mode="compact")
+    mcp_server.get_context_batch(path=str(tmp_path), limit=1, include_source=False)
+    mcp_server.list_summaries(str(tmp_path))
+
+    assert viewer_path.read_text(encoding="utf-8") == original_viewer
+    assert index_path.read_text(encoding="utf-8") == original_index
 
 
 def _save_all_worklist_summaries(path: Path) -> None:

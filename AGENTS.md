@@ -10,8 +10,8 @@ Aksi scans locally. The scanner and graph builder are the source of truth for fi
 
 When a user asks to visualize, refresh, inspect, or explain a project through Aksi MCP:
 
-1. Call `generate_visualization(path, prepare_summary_targets=True)`.
-2. Call `get_workflow_status(path)` and follow its `next_action`, `recommended_batch`, `viewer`, and exact `instructions`.
+1. Call `generate_visualization(path, prepare_summary_targets=True, response_mode="compact")`.
+2. Call `get_workflow_status(path, response_mode="compact")` and follow its `next_action`, `recommended_batch`, `viewer`, and exact `instructions`.
 3. If `next_action` is `summarize_batch`, treat `summary_worklist`/`recommended_batch.node_ids` as the executable queue. Do not iterate `summary_targets` directly for required work.
 4. Prefer the tool named by `recommended_batch.tool` (`get_summary_context_bundle(path)` by default) or `get_context_batch(path=path)` to fetch context for the current missing/stale worklist in one call. Use `limit` if the worklist is too large for the host context window, then repeat.
 5. Write grounded summaries from the exact returned contexts, verify each summary matches its node, then call `save_summaries(items, path)` once per batch. Keep `get_context(...)` and `save_summary(...)` for targeted or backwards-compatible one-node workflows.
@@ -90,8 +90,8 @@ Mark uncertainty in refined models. Do not add unsupported components, flows, ca
 
 ## MCP Tools
 
-- `generate_visualization(path=".", summarize=True, prepare_summary_targets=None, serve_viewer=True)`
-- `get_workflow_status(path=".", limit=None)`
+- `generate_visualization(path=".", summarize=True, prepare_summary_targets=None, serve_viewer=True, response_mode="compact|full")`
+- `get_workflow_status(path=".", limit=None, prepare_summary_targets=True, response_mode="compact|full")`
 - `get_model_seed(path=".")`
 - `get_summary_worklist(path=".")`
 - `get_context(node_id, path=".")`
@@ -109,6 +109,8 @@ Mark uncertainty in refined models. Do not add unsupported components, flows, ca
 - `scan_repo(path=".")`
 
 Passing `summarize=False` or `prepare_summary_targets=False` disables summary targets and makes `summary_completion.required` false. If you continue with `get_workflow_status` for that graph-only run, pass `prepare_summary_targets=False` there too. Do this only when the user explicitly wants a graph without host-written summaries.
+
+Prefer `response_mode="compact"` for normal agent loops. Use full responses only when you need complete `summary_targets`, `summary_worklist`, schemas, or long workflow text.
 
 ## Project Rules
 

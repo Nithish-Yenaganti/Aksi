@@ -20,6 +20,8 @@ from graph import load_architecture, refresh_stale_flags, slug, summarize_archit
 mcp = FastMCP("Aksi")
 _VIEWER_SERVERS: dict[str, tuple[socketserver.TCPServer, int]] = {}
 MAX_COMPONENT_CONTEXT_FILES = 12
+COMPACT_BATCH_LIMIT = 15
+VALID_RESPONSE_MODES = {"full", "compact"}
 
 
 def _aksi_root() -> Path:
@@ -362,22 +364,8 @@ def _summary_records_from_disk(repo: Path) -> dict[str, Any]:
 
 
 def _write_summary_index(repo: Path, seed_records: dict[str, Any] | None = None) -> None:
-    records = {
-        node_id: record
-        for node_id, record in (seed_records or {}).items()
-        if isinstance(record, dict) and record.get("summary") is not None
-    }
-    records.update(_summary_records_from_disk(repo))
     architecture = refresh_stale_flags(load_architecture(repo), repo)
-    nodes = architecture.get("nodes", {})
-
-    for node_id, record in records.items():
-        if node_id in nodes:
-            record["stale"] = _summary_stale(record, nodes[node_id], nodes)
-            record.pop("missing_node", None)
-        else:
-            record["stale"] = True
-            record["missing_node"] = True
+    records = _summary_records_for(repo, architecture, seed_records)
 
     _summary_index_path(repo).write_text(
         json.dumps(
@@ -390,6 +378,37 @@ def _write_summary_index(repo: Path, seed_records: dict[str, Any] | None = None)
         ),
         encoding="utf-8",
     )
+
+
+def _summary_records_for(
+    repo: Path,
+    architecture: dict[str, Any],
+    seed_records: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    records = {
+        node_id: record
+        for node_id, record in (seed_records or {}).items()
+        if isinstance(record, dict) and record.get("summary") is not None
+    }
+    records.update(_summary_records_from_disk(repo))
+    nodes = architecture.get("nodes", {})
+
+    for node_id, record in records.items():
+        if node_id in nodes:
+            record["stale"] = _summary_stale(record, nodes[node_id], nodes)
+            record.pop("missing_node", None)
+        else:
+            record["stale"] = True
+            record["missing_node"] = True
+    return records
+
+
+def _summary_index_payload(repo: Path, architecture: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "generated_at": _utc_now(),
+        "repo_summary": architecture.get("repo_summary"),
+        "summaries": _summary_records_for(repo, architecture),
+    }
 
 
 def _read_models(repo: Path) -> dict[str, Any]:
@@ -621,12 +640,16 @@ def _runtime_summary_targets(architecture: dict[str, Any], records: dict[str, An
     return targets
 
 
-def _summary_targets(repo: Path, architecture: dict[str, Any]) -> dict[str, list[dict[str, Any]]]:
-    records = (_read_json(_summary_index_path(repo), {}).get("summaries") or {})
+def _summary_targets(
+    repo: Path,
+    architecture: dict[str, Any],
+    records: dict[str, Any] | None = None,
+) -> dict[str, list[dict[str, Any]]]:
+    current_records = records if records is not None else _summary_records_for(repo, architecture)
     return {
-        "structure": _structure_summary_targets(architecture, records),
-        "architecture": _architecture_summary_targets(architecture, records),
-        "runtime": _runtime_summary_targets(architecture, records),
+        "structure": _structure_summary_targets(architecture, current_records),
+        "architecture": _architecture_summary_targets(architecture, current_records),
+        "runtime": _runtime_summary_targets(architecture, current_records),
     }
 
 
@@ -799,6 +822,12 @@ def _limited_node_ids(node_ids: list[str] | None, worklist: list[dict[str, Any]]
     }
 
 
+def _response_mode(value: str) -> str:
+    if value not in VALID_RESPONSE_MODES:
+        return "full"
+    return value
+
+
 def _model_refinement_status(repo: Path, architecture: dict[str, Any]) -> dict[str, Any]:
     models = _read_models(repo).get("models", {})
     source_graph_hash = _architecture_fingerprint(architecture)
@@ -843,7 +872,6 @@ def _model_refinement_status(repo: Path, architecture: dict[str, Any]) -> dict[s
 
 def _model_seed(repo: Path) -> dict[str, Any]:
     architecture = refresh_stale_flags(load_architecture(repo), repo)
-    _write_summary_index(repo)
     nodes = architecture.get("nodes", {})
     files = [node for node in nodes.values() if node.get("type") == "file"]
     symbol_types = {"function", "class", "interface", "struct", "type"}
@@ -1075,15 +1103,17 @@ def _workflow_status(
     repo: Path,
     limit: int | None = None,
     prepare_summary_targets: bool = True,
+    response_mode: str = "full",
 ) -> dict[str, Any]:
+    mode = _response_mode(response_mode)
     architecture = refresh_stale_flags(load_architecture(repo), repo)
-    _write_summary_index(repo)
     summary_targets = _summary_targets(repo, architecture) if prepare_summary_targets else _empty_summary_targets()
     summary_worklist = _summary_worklist(summary_targets)
     summary_counts = _summary_status(summary_targets, summary_worklist)
     summary_completion = _summary_completion(summary_worklist)
     model_refinement = _model_refinement_status(repo, architecture)
-    selected_ids, batch_limits = _limited_node_ids(None, summary_worklist, limit)
+    effective_limit = COMPACT_BATCH_LIMIT if mode == "compact" and limit is None else limit
+    selected_ids, batch_limits = _limited_node_ids(None, summary_worklist, effective_limit)
 
     worklist_missing = sum(1 for item in summary_worklist if item.get("summary_status") == "missing")
     worklist_stale = sum(1 for item in summary_worklist if item.get("summary_status") == "stale")
@@ -1141,8 +1171,9 @@ def _workflow_status(
             viewer_status["viewer_http_url"] = None
             viewer_status["viewer_http_error"] = str(error)
 
-    return {
+    result = {
         "path": str(repo),
+        "response_mode": mode,
         "next_action": next_action,
         "summary": {
             "complete": summaries_complete,
@@ -1176,6 +1207,12 @@ def _workflow_status(
         "viewer": viewer_status,
         "instructions": instructions,
     }
+    if mode == "compact":
+        result.pop("summary_worklist", None)
+        result["summary"]["work_items"] = len(summary_worklist)
+        result["summary"]["worklist_omitted"] = True
+        result["summary"]["worklist_tool"] = "get_summary_worklist"
+    return result
 
 
 def _scan_repository(
@@ -1206,9 +1243,11 @@ def generate_visualization(
     summarize: bool = True,
     prepare_summary_targets: bool | None = None,
     serve_viewer: bool = True,
+    response_mode: str = "full",
 ) -> dict[str, Any]:
     """Generate the architecture map for UI/MCP use without requiring users to run aksi.py."""
     repo = _repo(path)
+    mode = _response_mode(response_mode)
     should_prepare_summaries = summarize if prepare_summary_targets is None else prepare_summary_targets
     preserved_summary_records = _summary_records_from_disk(repo)
     result, architecture = _scan_repository(repo, preserved_summary_records)
@@ -1231,8 +1270,9 @@ def generate_visualization(
             viewer_http_error = str(error)
     elif not workflow_complete:
         viewer_http_error = "withheld_until_summary_and_model_refinement_complete"
-    return {
+    full_result = {
         **result,
+        "response_mode": mode,
         "viewer_file": str(viewer_file),
         "viewer_url": viewer_url,
         "viewer_http_url": viewer_http_url,
@@ -1319,6 +1359,42 @@ def generate_visualization(
             "Use save_architecture_model and save_runtime_model only for optional grounded refinements; they do not clear summary_worklist.",
         ],
     }
+    if mode == "compact":
+        workflow = _workflow_status(
+            repo,
+            prepare_summary_targets=should_prepare_summaries,
+            response_mode="compact",
+        )
+        return {
+            "path": str(repo),
+            "response_mode": mode,
+            "summary": result["summary"],
+            "architecture_file": result["architecture_file"],
+            "viewer_file": str(viewer_file),
+            "summary_index_file": str(_summary_index_path(repo)),
+            "viewer_url": viewer_url,
+            "viewer_http_url": viewer_http_url,
+            "viewer_http_error": viewer_http_error,
+            "viewer_release": full_result["viewer_release"],
+            "summary_mode": full_result["summary_mode"],
+            "summary_status": summary_status,
+            "summary_completion": summary_completion,
+            "summaries_complete": summary_completion["complete"],
+            "model_refinement": model_refinement,
+            "host_llm_required": bool(summary_worklist),
+            "next_action": workflow["next_action"],
+            "recommended_batch": workflow["recommended_batch"],
+            "instructions": workflow["instructions"],
+            "omitted": {
+                "summary_targets": True,
+                "summary_worklist": True,
+                "summary_schema": True,
+                "refinement_workflow": True,
+                "refined_model_schema": True,
+                "next_steps": True,
+            },
+        }
+    return full_result
 
 
 @mcp.tool
@@ -1326,7 +1402,6 @@ def get_map(path: str = ".") -> dict[str, Any]:
     """Return the current architecture map, refreshing stale flags from disk."""
     repo = _repo(path)
     architecture = load_architecture(repo)
-    _write_summary_index(repo)
     return refresh_stale_flags(architecture, repo)
 
 
@@ -1335,7 +1410,6 @@ def get_summary_worklist(path: str = ".") -> dict[str, Any]:
     """Return the deduplicated host-LLM summary worklist without rescanning."""
     repo = _repo(path)
     architecture = refresh_stale_flags(load_architecture(repo), repo)
-    _write_summary_index(repo)
     summary_targets = _summary_targets(repo, architecture)
     worklist = _summary_worklist(summary_targets)
     completion = _summary_completion(worklist)
@@ -1355,9 +1429,15 @@ def get_workflow_status(
     path: str = ".",
     limit: int | None = None,
     prepare_summary_targets: bool = True,
+    response_mode: str = "full",
 ) -> dict[str, Any]:
     """Return the next Aksi workflow action without requiring agents to interpret raw status fields."""
-    return _workflow_status(_repo(path), limit=limit, prepare_summary_targets=prepare_summary_targets)
+    return _workflow_status(
+        _repo(path),
+        limit=limit,
+        prepare_summary_targets=prepare_summary_targets,
+        response_mode=response_mode,
+    )
 
 
 @mcp.tool
@@ -1384,7 +1464,6 @@ def get_context_batch(
     """Return context for many summary nodes, defaulting to the missing/stale worklist."""
     repo = _repo(path)
     architecture = refresh_stale_flags(load_architecture(repo), repo)
-    _write_summary_index(repo)
     summary_targets = _summary_targets(repo, architecture)
     worklist = _summary_worklist(summary_targets)
     selected_ids, batch_limits = _limited_node_ids(node_ids, worklist, limit)
@@ -1519,10 +1598,8 @@ def get_summary(node_id: str, path: str = ".") -> dict[str, Any]:
 def list_summaries(path: str = ".") -> dict[str, Any]:
     """List saved summaries for the repository."""
     repo = _repo(path)
-    _write_summary_index(repo)
-    _write_static_viewer(repo, refresh_stale_flags(load_architecture(repo), repo))
-    index_path = _summary_index_path(repo)
-    return json.loads(index_path.read_text(encoding="utf-8"))
+    architecture = refresh_stale_flags(load_architecture(repo), repo)
+    return _summary_index_payload(repo, architecture)
 
 
 @mcp.tool
