@@ -1,5 +1,4 @@
-# Aksi
-
+[!Title](assets/Title.png)
 ## The Problem
 
 Coding agents waste time and tokens rereading whole repositories. Humans also need a fast way to see what a codebase contains, what depends on what, what changed, and which parts need explanation.
