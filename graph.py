@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import posixpath
 import re
@@ -53,8 +54,21 @@ def symbol_id(path: str, name: str, start_line: int) -> str:
     return f"symbol:{slug(path)}:{slug(name)}:{start_line}"
 
 
+def compact_ref(value: str, max_prefix: int = 48) -> str:
+    normalized = value.strip() or "unknown"
+    encoded = slug(normalized)
+    digest = hashlib.sha256(normalized.encode("utf-8")).hexdigest()[:12]
+    if len(encoded) <= max_prefix:
+        return f"{encoded}:{digest}"
+    return f"{encoded[:max_prefix]}:{digest}"
+
+
 def external_id(module: str) -> str:
-    return f"external:{slug(module)}"
+    return f"external:{compact_ref(module)}"
+
+
+def import_edge_id(path: str, index: int, module: str) -> str:
+    return f"edge:{slug(path)}:{index}:{compact_ref(module)}"
 
 
 def component_id(name: str) -> str:
@@ -482,7 +496,7 @@ def build_architecture(result: ScanResult) -> dict[str, Any]:
                 local_import_sources.append(scanned_file.path)
             edges.append(
                 {
-                    "id": f"edge:{slug(scanned_file.path)}:{index}:{slug(import_ref.module)}",
+                    "id": import_edge_id(scanned_file.path, index, import_ref.module),
                     "type": "import",
                     "source": current_file_id,
                     "target": target,

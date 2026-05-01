@@ -61,6 +61,9 @@ def _context_dir(repo: Path) -> Path:
 
 def _summary_path(repo: Path, node_id: str) -> Path:
     filename = quote(node_id.strip(), safe="ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_.-") or "root"
+    if len(filename) > 140:
+        digest = hashlib.sha256(node_id.encode("utf-8")).hexdigest()[:16]
+        filename = f"{filename[:100]}-{digest}"
     return _context_dir(repo) / f"{filename}.json"
 
 

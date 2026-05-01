@@ -87,6 +87,17 @@ def test_mcp_summary_memory_round_trip_and_stale_detection(tmp_path: Path) -> No
     assert stale["stale"] is True
 
 
+def test_save_summary_handles_long_node_ids(tmp_path: Path) -> None:
+    long_node_id = "external:" + "very-long-import-name-" * 20
+    path = mcp_server._summary_path(tmp_path, long_node_id)
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text('{"ok": true}', encoding="utf-8")
+
+    assert path.exists()
+    assert len(path.name) < 180
+
+
 def test_mcp_summary_index_keeps_missing_node_records(tmp_path: Path) -> None:
     (tmp_path / "app.py").write_text("def run():\n    return 1\n", encoding="utf-8")
     mcp_server.generate_visualization(str(tmp_path))

@@ -4,11 +4,12 @@ from graph import (
     UNUSED_HINT_REASON,
     build_architecture,
     component_id,
+    external_id,
     file_id,
     refresh_stale_flags,
     write_architecture,
 )
-from scanner import scan_repo
+from scanner import ImportRef, ScannedFile, ScanResult, scan_repo
 
 
 def test_graph_builds_hierarchy_and_resolves_local_imports(tmp_path: Path) -> None:
@@ -97,6 +98,32 @@ def test_graph_resolves_typescript_extensionless_and_js_imports(tmp_path: Path) 
     assert any(edge["target"] == file_id("tools/recordFeedback.ts") for edge in architecture["edges"])
     assert nodes[file_id("memory/db.ts")]["unused"] is False
     assert nodes[file_id("tools/recordFeedback.ts")]["unused"] is False
+
+
+def test_graph_uses_short_stable_external_ids(tmp_path: Path) -> None:
+    long_module = "from graph import " + "very_long_import_name_" * 20
+    result = ScanResult(
+        repo_path=str(tmp_path),
+        files=[
+            ScannedFile(
+                path="app.py",
+                language="python",
+                hash="hash",
+                imports=[ImportRef(import_text=long_module, module=long_module, start_line=1, end_line=1)],
+            )
+        ],
+        scanner={"version": "test", "files_scanned": 1, "languages": ["python"], "errors": []},
+    )
+
+    architecture = build_architecture(result)
+    node_id = external_id(long_module)
+    edge = architecture["edges"][0]
+
+    assert node_id in architecture["nodes"]
+    assert len(node_id) < 90
+    assert architecture["nodes"][node_id]["name"] == long_module
+    assert edge["target"] == node_id
+    assert len(edge["id"]) < 120
 
 
 def test_graph_builds_project_architecture_components(tmp_path: Path) -> None:
