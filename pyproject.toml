@@ -22,7 +22,6 @@ multilang = [
 ]
 
 [project.scripts]
-aksi = "aksi:main"
 aksi-mcp = "mcp_server:main"
 
 [tool.setuptools]

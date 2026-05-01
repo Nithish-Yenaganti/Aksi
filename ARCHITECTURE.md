@@ -15,8 +15,8 @@ The boundary is intentional:
 ## System Flow
 
 ```text
-User or MCP host
-  -> generate_visualization / aksi
+MCP host
+  -> generate_visualization
   -> scanner.py
   -> graph.py
   -> Files/architecture.json + Files/index.html
@@ -68,10 +68,9 @@ User or MCP host
 
 `aksi.py`
 
-- One-command local runner.
+- Developer/debug runner.
 - Calls the same generation path as MCP.
 - Serves `Files/index.html` from a local HTTP server.
-- Exposes `--scan-only`, `--no-summarize`, and `--test`.
 
 ## MCP Workflow
 
@@ -166,10 +165,9 @@ Files/context/models.json
 
 ## Packaging
 
-The project exposes two installed commands:
+The project exposes one user-facing installed command:
 
 ```text
-aksi
 aksi-mcp
 ```
 

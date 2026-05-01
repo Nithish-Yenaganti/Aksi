@@ -46,28 +46,28 @@ Local repo
 
 Aksi does the local mapping and memory work. The host LLM does the language and judgment work.
 
-## Quickstart
+## Install For MCP
 
-From this repo:
+Aksi is meant to be launched by an MCP client, not run manually as a daily tool.
+
+After publishing, install it as a local MCP server:
+
+```bash
+pipx install aksi
+```
+
+or:
+
+```bash
+uv tool install aksi
+```
+
+During local development, install from this checkout:
 
 ```bash
 python -m venv .venv
 . .venv/bin/activate
 pip install -e ".[dev]"
-python aksi.py
-```
-
-Run the MCP server:
-
-```bash
-python mcp_server.py
-```
-
-Installed commands:
-
-```bash
-aksi
-aksi-mcp
 ```
 
 Optional multi-language grammar bundle:
@@ -78,25 +78,27 @@ pip install -e ".[multilang]"
 
 ## MCP Setup
 
-Generate a local MCP config snippet:
-
-```bash
-scripts/setup_mcp.sh --write-config .mcp/aksi.json
-```
-
-For Claude Desktop on macOS:
-
-```bash
-scripts/setup_mcp.sh --claude-desktop
-```
-
 MCP clients should launch:
 
 ```text
 command: aksi-mcp
 ```
 
+For local development before publishing, generate a config snippet from this checkout:
+
+```bash
+scripts/setup_mcp.sh --write-config .mcp/aksi.json
+```
+
+For Claude Desktop on macOS during local development:
+
+```bash
+scripts/setup_mcp.sh --claude-desktop
+```
+
 ## Agent Workflow
+
+The user should only need to ask their MCP-enabled coding agent to use Aksi. The agent owns the workflow.
 
 Agents should start small:
 
@@ -132,20 +134,7 @@ It supports:
 - PNG export
 - copy selected node summary
 
-Run locally:
-
-```bash
-python aksi.py
-```
-
-Useful options:
-
-```bash
-python aksi.py --scan-only
-python aksi.py --no-summarize
-python aksi.py --test
-python aksi.py /path/to/repo --port 8080
-```
+The viewer is generated and released by the MCP workflow. Users should not need to run a separate viewer command.
 
 ## Generated Files
 
@@ -184,17 +173,7 @@ Use `response_mode="compact"` for normal agent loops. Use full responses only wh
 
 The recommended distribution is a Python package, not a hosted scanner. Aksi needs direct filesystem access to the user's repository, so the MCP server should run beside the codebase.
 
-Recommended install shape:
-
-```bash
-pipx install aksi
-```
-
-or:
-
-```bash
-uv tool install aksi
-```
+Recommended install shape is `pipx install aksi` or `uv tool install aksi`, then configure the MCP client to launch `aksi-mcp`.
 
 For a cloud product, use a hybrid model:
 
@@ -214,6 +193,6 @@ Run checks:
 
 Packaging notes:
 
-- `pyproject.toml` defines `aksi` and `aksi-mcp`.
+- `pyproject.toml` exposes `aksi-mcp` as the user-facing command.
 - The viewer template is packaged as `share/aksi/ui/index.html`.
 - `mcp_server.py` can load the viewer from either a repo checkout or installed package data.

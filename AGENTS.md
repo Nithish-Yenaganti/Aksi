@@ -154,7 +154,7 @@ Do not commit `Files/`.
 - `scanner.py`: walks repos, hashes files, extracts symbols, and extracts imports.
 - `graph.py`: builds `architecture.json`, nodes, dependency edges, stale flags, unused hints, and local components.
 - `mcp_server.py`: FastMCP stdio server and agent-facing tools.
-- `aksi.py`: one-command local runner that generates and serves `Files/index.html`.
+- `aksi.py`: developer/debug runner only; normal user workflows must go through MCP.
 - `ui/index.html`: static viewer template copied into generated output.
 - `tests/`: scanner, graph, MCP, summary, model, and viewer-template coverage.
 
