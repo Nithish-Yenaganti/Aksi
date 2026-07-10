@@ -2,7 +2,9 @@
 
 ## Purpose
 
-Aksi is a local-first codebase visualization and MCP context tool. It scans a repository on disk, builds a static graph of files/symbols/imports, writes generated artifacts under `Files/`, and lets an MCP host add grounded summaries and refined Architecture/Runtime models.
+Aksi is a local-first MCP context freshness system. It scans repository structure, tracks stale understanding, prepares host-LLM worklists, and releases a static viewer after summaries and refined models are current.
+
+The graph is an intermediate artifact; the product boundary is the status-driven MCP workflow that turns local facts into fresh, inspectable repo understanding.
 
 The boundary is intentional:
 
@@ -12,7 +14,7 @@ The boundary is intentional:
 - Unused-code hints are conservative review signals, not proof that code is safe to remove.
 - The static viewer supports inspection features such as search, filtering, and export; chat belongs to the MCP host, not the viewer.
 
-## System Flow
+## MCP Completion Flow
 
 ```text
 MCP host
@@ -63,7 +65,7 @@ MCP host
 - Provides search, filtering, and export controls for graph inspection.
 - Uses saved summaries from `Files/context/index.json`.
 - Uses host-refined models from `Files/context/models.json` when available.
-- Falls back to local static candidates when refined models are missing or stale.
+- Falls back to local candidates when refined models are missing or stale.
 - Does not include chat; MCP clients provide the agent conversation.
 
 `aksi.py`
@@ -82,9 +84,13 @@ generate_visualization(path, prepare_summary_targets=True, response_mode="compac
 get_workflow_status(path, response_mode="compact")
 
 if next_action == "summarize_batch":
-  get_summary_context_bundle(path, limit=...)
+  get_context_batch(node_ids=recommended_batch.node_ids, path)
   host writes verified summaries
   save_summaries(items, path)
+  repeat get_workflow_status
+
+if next_action == "refresh_graph":
+  generate_visualization(path, prepare_summary_targets=True, response_mode="compact")
   repeat get_workflow_status
 
 if next_action == "refine_models":

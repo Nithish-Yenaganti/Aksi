@@ -13,12 +13,15 @@ def test_mcp_helpers_return_expected_shapes(tmp_path: Path) -> None:
     context = mcp_server.get_context(file_node["id"], str(tmp_path))
 
     assert scan_summary["summary"]["files"] == 1
-    assert scan_summary["viewer_file"].endswith("Files/index.html")
+    assert "viewer_file" not in scan_summary
+    assert scan_summary["viewer_artifact_generated"] is True
     assert scan_summary["viewer_url"] is None
     assert scan_summary["viewer_http_url"] is None
     assert scan_summary["viewer_http_error"] == "withheld_until_summary_and_model_refinement_complete"
     assert scan_summary["viewer_release"]["complete"] is False
     assert scan_summary["viewer_release"]["withheld"] is True
+    assert scan_summary["preview"]["not_final"] is True
+    assert "viewer_file" not in scan_summary["preview"]
     assert scan_summary["summary_mode"] == "host_llm_worklist"
     assert scan_summary["summary_behavior"]["automatic_summaries"] is False
     assert scan_summary["summary_behavior"]["written_by_aksi"] == 0
@@ -38,8 +41,9 @@ def test_mcp_helpers_return_expected_shapes(tmp_path: Path) -> None:
     assert root_target["needs_summary"] is True
     assert root_target["action"] == "write"
     assert file_target["summary_status"] == "missing"
-    assert Path(scan_summary["viewer_file"]).exists()
-    viewer = Path(scan_summary["viewer_file"]).read_text(encoding="utf-8")
+    viewer_file = tmp_path / "Files" / "index.html"
+    assert viewer_file.exists()
+    viewer = viewer_file.read_text(encoding="utf-8")
     assert "__AKSI_ARCHITECTURE__" in viewer
     assert 'id="searchBox"' in viewer
     assert 'data-filter="missing"' in viewer
@@ -48,6 +52,11 @@ def test_mcp_helpers_return_expected_shapes(tmp_path: Path) -> None:
     assert "Export SVG" in viewer
     assert "Export PNG" in viewer
     assert "Copy Summary" in viewer
+    assert "__AKSI_STATUS__" in viewer
+    assert 'id="readiness"' in viewer
+    assert "Trust:" in viewer
+    assert "Unused Hint" in viewer
+    assert "Runtime Flow" in viewer
     assert scan_summary["summary_index_file"].endswith("Files/context/index.json")
     assert graph["root"] == "repo:."
     assert "def run" in context["source"]
@@ -274,8 +283,16 @@ def test_host_refined_models_are_saved_and_embedded_in_viewer(tmp_path: Path) ->
                 "change_risk": "medium",
                 "open_questions": "Confirm external callers.",
                 "confidence": "high",
+                "evidence_node_ids": ["file:app.py"],
             },
-            {"id": "arch:core", "name": "Core Logic", "type": "architecture_component"},
+            {
+                "id": "arch:core",
+                "name": "Core Logic",
+                "type": "architecture_component",
+                "purpose": "Runs the app logic.",
+                "confidence": "medium",
+                "evidence_node_ids": ["file:app.py"],
+            },
         ],
         "edges": [{"source": "arch:entry", "target": "arch:core", "label": "delegates"}],
     }
@@ -283,8 +300,22 @@ def test_host_refined_models_are_saved_and_embedded_in_viewer(tmp_path: Path) ->
     saved = mcp_server.save_architecture_model(model, str(tmp_path))
     runtime_model = {
         "nodes": [
-            {"id": "runtime:start", "name": "Start", "type": "runtime_step"},
-            {"id": "runtime:finish", "name": "Finish", "type": "runtime_step"},
+            {
+                "id": "runtime:start",
+                "name": "Start",
+                "type": "runtime_step",
+                "purpose": "Starts runtime flow.",
+                "confidence": "medium",
+                "evidence_node_ids": ["file:app.py"],
+            },
+            {
+                "id": "runtime:finish",
+                "name": "Finish",
+                "type": "runtime_step",
+                "purpose": "Finishes runtime flow.",
+                "confidence": "medium",
+                "evidence_node_ids": ["file:app.py"],
+            },
         ],
         "edges": [{"source": "runtime:start", "target": "runtime:finish", "label": "then"}],
     }
@@ -324,7 +355,15 @@ def test_refined_model_rejects_bad_edges(tmp_path: Path) -> None:
 
     result = mcp_server.save_runtime_model(
         {
-            "nodes": [{"id": "runtime:start", "name": "Start"}],
+            "nodes": [
+                {
+                    "id": "runtime:start",
+                    "name": "Start",
+                    "purpose": "Starts runtime flow.",
+                    "confidence": "medium",
+                    "evidence_node_ids": ["file:app.py"],
+                }
+            ],
             "edges": [{"source": "runtime:start", "target": "runtime:missing"}],
         },
         str(tmp_path),
@@ -332,6 +371,104 @@ def test_refined_model_rejects_bad_edges(tmp_path: Path) -> None:
 
     assert "error" in result
     assert result["model_type"] == "runtime"
+
+
+def test_refined_model_rejects_weak_nodes(tmp_path: Path) -> None:
+    (tmp_path / "app.py").write_text("def run():\n    return 1\n", encoding="utf-8")
+    mcp_server.generate_visualization(str(tmp_path))
+
+    result = mcp_server.save_runtime_model(
+        {"nodes": [{"id": "runtime:start", "name": "Start"}], "edges": []},
+        str(tmp_path),
+    )
+
+    assert "error" in result
+    assert "purpose, summary, behavior, or detail" in result["error"]
+
+
+def test_refined_model_rejects_invalid_evidence_node_ids(tmp_path: Path) -> None:
+    (tmp_path / "app.py").write_text("def run():\n    return 1\n", encoding="utf-8")
+    mcp_server.generate_visualization(str(tmp_path))
+
+    missing = mcp_server.save_runtime_model(
+        {
+            "nodes": [
+                {
+                    "id": "runtime:start",
+                    "name": "Start",
+                    "purpose": "Starts runtime flow.",
+                    "confidence": "medium",
+                    "evidence_node_ids": ["file:missing.py"],
+                }
+            ],
+            "edges": [],
+        },
+        str(tmp_path),
+    )
+    empty = mcp_server.save_runtime_model(
+        {
+            "nodes": [
+                {
+                    "id": "runtime:start",
+                    "name": "Start",
+                    "purpose": "Starts runtime flow.",
+                    "confidence": "medium",
+                    "evidence_node_ids": [""],
+                }
+            ],
+            "edges": [],
+        },
+        str(tmp_path),
+    )
+    non_string = mcp_server.save_runtime_model(
+        {
+            "nodes": [
+                {
+                    "id": "runtime:start",
+                    "name": "Start",
+                    "purpose": "Starts runtime flow.",
+                    "confidence": "medium",
+                    "evidence_node_ids": [123],
+                }
+            ],
+            "edges": [],
+        },
+        str(tmp_path),
+    )
+
+    assert "existing graph node ids" in missing["error"]
+    assert "existing graph node ids" in empty["error"]
+    assert "existing graph node ids" in non_string["error"]
+
+
+def test_refined_model_rejects_duplicate_model_node_ids(tmp_path: Path) -> None:
+    (tmp_path / "app.py").write_text("def run():\n    return 1\n", encoding="utf-8")
+    mcp_server.generate_visualization(str(tmp_path))
+
+    result = mcp_server.save_architecture_model(
+        {
+            "nodes": [
+                {
+                    "id": "arch:entry",
+                    "name": "Entry",
+                    "purpose": "Starts architecture flow.",
+                    "confidence": "high",
+                    "evidence_node_ids": ["file:app.py"],
+                },
+                {
+                    "id": "arch:entry",
+                    "name": "Duplicate",
+                    "purpose": "Duplicates an id.",
+                    "confidence": "low",
+                    "evidence_node_ids": ["file:app.py"],
+                },
+            ],
+            "edges": [],
+        },
+        str(tmp_path),
+    )
+
+    assert "duplicate model node id" in result["error"]
 
 
 def test_generate_visualization_returns_host_llm_summary_targets(tmp_path: Path) -> None:
@@ -382,10 +519,14 @@ def test_generate_visualization_compact_response_omits_large_payloads(tmp_path: 
 
     assert result["response_mode"] == "compact"
     assert result["next_action"] == "summarize_batch"
-    assert result["recommended_batch"]["tool"] == "get_summary_context_bundle"
+    assert result["recommended_batch"]["tool"] == "get_context_batch"
     assert result["recommended_batch"]["limit"] == 15
     assert "summary_targets" not in result
     assert "summary_worklist" not in result
+    assert "viewer_file" not in result
+    assert result["preview"]["not_final"] is True
+    assert "viewer_file" not in result["preview"]
+    assert result["preview"]["viewer_file_available"] is True
     assert result["omitted"]["summary_targets"] is True
     assert result["omitted"]["summary_worklist"] is True
 
@@ -537,11 +678,33 @@ def _save_all_worklist_summaries(path: Path) -> None:
 
 def _save_current_test_models(path: Path) -> None:
     mcp_server.save_architecture_model(
-        {"nodes": [{"id": "architecture:test", "name": "Test Architecture"}], "edges": []},
+        {
+            "nodes": [
+                {
+                    "id": "architecture:test",
+                    "name": "Test Architecture",
+                    "purpose": "Test architecture model.",
+                    "confidence": "high",
+                    "evidence_node_ids": ["repo:."],
+                }
+            ],
+            "edges": [],
+        },
         str(path),
     )
     mcp_server.save_runtime_model(
-        {"nodes": [{"id": "runtime:test", "name": "Test Runtime"}], "edges": []},
+        {
+            "nodes": [
+                {
+                    "id": "runtime:test",
+                    "name": "Test Runtime",
+                    "purpose": "Test runtime model.",
+                    "confidence": "high",
+                    "evidence_node_ids": ["repo:."],
+                }
+            ],
+            "edges": [],
+        },
         str(path),
     )
 
@@ -557,8 +720,8 @@ def test_get_workflow_status_recommends_summary_batch_and_withholds_viewer(tmp_p
     assert status["summary"]["remaining"] == len(generated["summary_worklist"])
     assert status["summary"]["missing"] == len(generated["summary_worklist"])
     assert status["summary"]["stale"] == 0
-    assert status["recommended_batch"]["tool"] == "get_summary_context_bundle"
-    assert status["recommended_batch"]["fallback_tool"] == "get_context_batch"
+    assert status["recommended_batch"]["tool"] == "get_context_batch"
+    assert status["recommended_batch"]["fallback_tool"] == "get_summary_context_bundle"
     assert len(status["recommended_batch"]["node_ids"]) == 2
     assert status["recommended_batch"]["truncated"] is True
     assert status["viewer"]["releasable"] is False
@@ -566,7 +729,7 @@ def test_get_workflow_status_recommends_summary_batch_and_withholds_viewer(tmp_p
     assert "viewer_http_url" not in status["viewer"]
     assert "summary_worklist has" in status["viewer"]["withheld_reason"]
     assert status["instructions"] == [
-        "Call get_summary_context_bundle(path=path, limit=limit) for recommended_batch.node_ids.",
+        "Call get_context_batch(node_ids=recommended_batch.node_ids, path=path) for the recommended batch.",
         "Write and verify one grounded summary per returned context.",
         "Call save_summaries(items, path=path) once for the batch.",
         "Call get_workflow_status(path=path, limit=limit) again.",
@@ -591,6 +754,30 @@ def test_get_workflow_status_recommends_model_refinement_after_summaries(tmp_pat
     assert status["viewer"]["releasable"] is False
     assert "required models: architecture, runtime" in status["viewer"]["withheld_reason"]
     assert status["instructions"][0].startswith("Call get_model_seed")
+
+
+def test_get_workflow_status_requires_graph_refresh_for_stale_files(tmp_path: Path) -> None:
+    source = tmp_path / "app.py"
+    source.write_text("def run():\n    return 1\n", encoding="utf-8")
+    mcp_server.generate_visualization(str(tmp_path), serve_viewer=False)
+    _save_all_worklist_summaries(tmp_path)
+    _save_current_test_models(tmp_path)
+
+    source.write_text("def run():\n    return 2\n", encoding="utf-8")
+    status = mcp_server.get_workflow_status(str(tmp_path), prepare_summary_targets=False)
+    digest = mcp_server.get_digest(str(tmp_path))
+
+    assert status["next_action"] == "refresh_graph"
+    assert status["graph"]["current"] is False
+    assert status["graph"]["stale_files"] == 1
+    assert status["viewer"]["releasable"] is False
+    assert "viewer_url" not in status["viewer"]
+    assert "saved graph is stale" in status["viewer"]["withheld_reason"]
+    assert status["recommended_batch"]["node_ids"] == []
+    assert status["recommended_batch"]["tool"] is None
+    assert digest["workflow"]["next_action"] == "refresh_graph"
+    assert digest["workflow"]["viewer_releasable"] is False
+    assert "viewer_file" not in digest["workflow"]
 
 
 def test_get_model_seed_returns_compact_refinement_facts(tmp_path: Path) -> None:
@@ -668,9 +855,11 @@ def test_get_digest_returns_compact_local_static_repo_facts(tmp_path: Path) -> N
     assert digest["repo"]["languages"] == {"python": 1, "typescript": 2}
     assert digest["repo"]["counts"]["files"] == 3
     assert digest["workflow"]["next_action"] == "summarize_batch"
-    assert digest["workflow"]["next_tool"] == "get_summary_context_bundle"
+    assert digest["workflow"]["next_tool"] == "get_context_batch"
     assert digest["workflow"]["viewer_releasable"] is False
     assert digest["workflow"]["viewer_url"] is None
+    assert "viewer_file" not in digest["workflow"]
+    assert digest["workflow"]["viewer_artifact_generated"] is True
     assert digest["summary_completion"]["required"] is True
     assert digest["model_refinement"]["architecture_required"] is True
     assert any(item["path"] == "server.ts" for item in digest["entrypoints"])

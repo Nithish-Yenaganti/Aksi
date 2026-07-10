@@ -2,13 +2,17 @@
 
 # Aksi
 
-Aksi is a local MCP context engine that helps AI coding agents understand repositories without rereading every file.
+Aksi is an MCP-first context freshness layer for coding agents.
 
-It scans code locally, builds a visual repo map, tracks stale context, stores host-written summaries, and gives agents precise node-level context through MCP.
+It prevents agents from treating a repo visualization as complete until summaries, stale context, and Architecture/Runtime models have been refreshed from grounded local evidence.
 
-## Why Aksi Exists
+Aksi scans code locally, tracks what changed, prepares exact context worklists for the host LLM, stores verified summaries, and releases a static blueprint viewer only when the workflow is complete.
 
-AI coding agents are powerful, but they still waste context and time rediscovering the same repository structure:
+Aksi is not a general knowledge graph, graph database, arbitrary repo query engine, or universal artifact indexer. It focuses on one workflow: help an MCP host keep repo understanding fresh, grounded, and visibly complete.
+
+## The Problem
+
+AI coding agents often stop at a partial repo scan and act as if they understand the project. That creates stale summaries, missed dependencies, weak architecture guesses, and premature "done" responses.
 
 - Which files matter?
 - What imports what?
@@ -19,10 +23,20 @@ AI coding agents are powerful, but they still waste context and time rediscoveri
 
 Aksi turns that repo-discovery work into a local, reusable context layer.
 
+## Aksi's Wedge
+
+Aksi is built around a completion contract:
+
+- scan local structure deterministically;
+- detect stale summaries and changed files;
+- give the host LLM exact context batches;
+- save host-written summaries and refined models;
+- withhold the final viewer link until the workflow is complete.
+
 ## What Aksi Does
 
 - Scans local repositories for files, symbols, imports, dependency edges, stale files, and possible unused-code hints.
-- Generates a static blueprint viewer with Structure, Architecture, and Runtime Flow tabs.
+- Generates a static blueprint viewer only as the final inspection surface for the completed MCP workflow.
 - Adds human-facing viewer tools: search, status filters, SVG/PNG export, and copyable node summaries.
 - Exposes MCP tools for agents to fetch exact repo, file, folder, symbol, component, and runtime-flow context.
 - Preserves summaries and marks only changed context as stale.
@@ -115,7 +129,8 @@ get_workflow_status(path, response_mode="compact")
 
 Follow `next_action`:
 
-- `summarize_batch`: call `get_summary_context_bundle`, write grounded summaries, then `save_summaries`.
+- `summarize_batch`: call `get_context_batch` for `recommended_batch.node_ids`, write grounded summaries, then `save_summaries`.
+- `refresh_graph`: rerun `generate_visualization`, then check workflow status again.
 - `refine_models`: call `get_model_seed`, inspect context as needed, then save Architecture/Runtime models.
 - `release_viewer`: share `viewer.viewer_http_url` or `viewer.viewer_url`.
 

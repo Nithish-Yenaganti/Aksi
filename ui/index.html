@@ -127,6 +127,38 @@
       white-space: nowrap;
     }
 
+    #readiness {
+      position: fixed;
+      left: 12px;
+      bottom: 58px;
+      z-index: 3;
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+      max-width: min(980px, calc(100vw - 24px));
+      pointer-events: none;
+    }
+
+    .readiness-pill {
+      padding: 6px 8px;
+      border: 1px solid rgba(240, 250, 255, 0.5);
+      background: rgba(4, 63, 109, 0.78);
+      color: var(--muted);
+      font-size: 11px;
+      white-space: nowrap;
+      box-shadow: inset 0 0 0 1px rgba(240, 250, 255, 0.08);
+    }
+
+    .readiness-pill.ready {
+      color: var(--ink);
+      border-color: rgba(240, 250, 255, 0.78);
+    }
+
+    .readiness-pill.warn {
+      color: var(--stale);
+      border-color: rgba(246, 212, 107, 0.78);
+    }
+
     #viewModes {
       display: flex;
       gap: 4px;
@@ -417,6 +449,7 @@
     <div id="repoName">Loading repo</div>
   </div>
   <div id="meta">Loading architecture.json</div>
+  <div id="readiness" aria-live="polite"></div>
   <div id="details">
   </div>
   <svg id="canvas" role="img" aria-label="Aksi codebase map"></svg>
@@ -441,6 +474,7 @@
     const importEdgeLayer = viewport.append("g").attr("class", "import-edges");
     const nodeLayer = viewport.append("g").attr("class", "nodes");
     const meta = document.querySelector("#meta");
+    const readiness = document.querySelector("#readiness");
     const repoName = document.querySelector("#repoName");
     const details = document.querySelector("#details");
     const modeButtons = Array.from(document.querySelectorAll("#viewModes button"));
@@ -462,6 +496,7 @@
     let selectedSummaryText = "";
     let summaryIndex = {};
     let refinedModels = {};
+    let workflowStatus = {};
     let filterState = { query: "", status: "all" };
     document.body.dataset.view = currentView;
 
@@ -596,6 +631,34 @@
         node.dependencies ||
         node.used_by
       );
+    }
+
+    function modelState(modelType) {
+      const modelStatus = workflowStatus?.model_refinement;
+      if (modelStatus?.current_models?.[modelType]) return "host-refined current";
+      if (modelStatus?.stale_models?.[modelType]) return "host-refined stale";
+      if (refinedModels?.[modelType]?.source_graph_hash && !modelStatus?.current_models?.[modelType]) return "host-refined stale";
+      return "local candidate";
+    }
+
+    function renderReadiness() {
+      if (!readiness) return;
+      const summary = workflowStatus?.summary || {};
+      const viewer = workflowStatus?.viewer || {};
+      const summaryLabel = summary.complete
+        ? "Summaries: ready"
+        : `Summaries: missing ${summary.missing || 0} · stale ${summary.stale || 0}`;
+      const architectureState = modelState("architecture");
+      const runtimeState = modelState("runtime");
+      const items = [
+        { text: summaryLabel, state: summary.complete ? "ready" : "warn" },
+        { text: `Architecture: ${architectureState}`, state: architectureState.includes("current") ? "ready" : "warn" },
+        { text: `Runtime Flow: ${runtimeState}`, state: runtimeState.includes("current") ? "ready" : "warn" },
+        { text: viewer.releasable ? "Viewer: releasable" : "Viewer: not releasable", state: viewer.releasable ? "ready" : "warn" },
+      ];
+      readiness.innerHTML = items
+        .map(item => `<span class="readiness-pill ${item.state}">${escapeHtml(item.text)}</span>`)
+        .join("");
     }
 
     function nodeSearchText(node) {
@@ -1115,7 +1178,7 @@
     function buildRuntimeFlow(graph) {
       const refined = buildRefinedModel("runtime", "runtime step");
       if (refined) return refined;
-      return dependencyItems(graph, "runtime module");
+      return dependencyItems(graph, "static flow module");
     }
 
     function layoutRuntimeItems(items) {
@@ -1354,7 +1417,7 @@
         };
       }
       if (currentView === "architecture") {
-        return { ...describeArchitectureNode(node, incoming, outgoing), source: "Local architecture summary" };
+        return { ...describeArchitectureNode(node, incoming, outgoing), source: "Static candidate" };
       }
       if (node.type === "repo" && currentGraph?.repo_summary) {
         return {
@@ -1362,12 +1425,12 @@
           why: "This gives a quick repo-level orientation before inspecting individual files and symbols.",
           how: "Aksi generated it from local scan counts, detected languages, symbols, and imports.",
           role: "Top-level overview for the scanned repository.",
-          source: "Local repo summary",
+          source: "Local fallback",
         };
       }
       return currentView === "runtime"
-        ? { ...describeRuntimeNode(node, incoming, outgoing), source: "Local fallback summary" }
-        : { ...describeStructureNode(node, incoming, outgoing), source: "Local fallback summary" };
+        ? { ...describeRuntimeNode(node, incoming, outgoing), source: "Static candidate" }
+        : { ...describeStructureNode(node, incoming, outgoing), source: "Local fallback" };
     }
 
     function updateDetails(node, graph) {
@@ -1384,18 +1447,22 @@
       ].filter(Boolean).join(" · ");
       selectedSummaryText = detailSummaryText(node, meta, summary, edges, outgoing, incoming);
       updateShareControls();
+      const unusedHint = node.unused
+        ? `${node.unused_confidence || "low"} confidence: ${node.unused_reason || "No local static references found."}`
+        : "";
 
       details.classList.add("open");
       details.innerHTML = [
         `<h2>${escapeHtml(node.name)}</h2>`,
         `<p class="summary-meta">${escapeHtml(meta)}</p>`,
-        `<p class="summary-meta">${escapeHtml(summary.source)}</p>`,
+        `<p class="summary-meta">Trust: ${escapeHtml(summary.source)}</p>`,
         summarySection("Purpose", summary.purpose || summary.summary || summary.what),
         summarySection("Behavior", summary.behavior || summary.how_it_works || summary.how),
         summarySection("Interfaces", summary.interfaces),
         summarySection("Dependencies", summary.dependencies || summary.relationships || summary.role),
         summarySection("Used By", summary.used_by),
         summarySection("Change Risk", summary.change_risk, "unknown"),
+        unusedHint ? summarySection("Unused Hint", unusedHint) : "",
         summarySection("Open Questions", summary.open_questions, "None recorded."),
         summarySection("Confidence", summary.confidence, "unknown"),
         `<p class="summary-foot">${edges.length} connected edge${edges.length === 1 ? "" : "s"} · ${outgoing.length} out · ${incoming.length} in</p>`,
@@ -1590,8 +1657,8 @@
       meta.textContent = refined
         ? `${items.length} host-refined architecture components · ${edges.length} relationships`
         : componentMode
-        ? `${items.length} architecture components · ${edges.length} component relationships · local-first candidates`
-        : `${items.length} architecture modules · ${edges.length} dependency relationships · local-first analysis`;
+        ? `${items.length} architecture components · ${edges.length} component relationships · local candidate`
+        : `${items.length} architecture modules · ${edges.length} dependency relationships · local candidate`;
     }
 
     function renderRuntimeFlow(graph) {
@@ -1667,7 +1734,7 @@
 
       meta.textContent = refined
         ? `${items.length} host-refined runtime steps · ${edges.length} flow relationships`
-        : `${items.length} runtime modules · ${edges.length} static import-flow edges`;
+        : `${items.length} runtime-flow modules · ${edges.length} static import-flow edges · local candidate`;
     }
 
     function render(graph) {
@@ -1680,6 +1747,7 @@
       } else {
         renderStructure(graph);
       }
+      renderReadiness();
       applyNodeFilters();
     }
 
@@ -1774,6 +1842,7 @@
       if (window.location.protocol === "file:" && window.__AKSI_SUMMARIES__) {
         summaryIndex = window.__AKSI_SUMMARIES__.summaries || {};
         applyNodeFilters();
+        renderReadiness();
         return true;
       }
       try {
@@ -1782,6 +1851,7 @@
         const payload = await response.json();
         summaryIndex = payload?.summaries || {};
         applyNodeFilters();
+        renderReadiness();
         return true;
       } catch (_error) {
         return false;
@@ -1791,6 +1861,7 @@
     async function refreshModels() {
       if (window.location.protocol === "file:" && window.__AKSI_MODELS__) {
         refinedModels = window.__AKSI_MODELS__.models || {};
+        renderReadiness();
         return true;
       }
       try {
@@ -1798,16 +1869,18 @@
         if (!response.ok) return false;
         const payload = await response.json();
         refinedModels = payload?.models || {};
+        renderReadiness();
         return true;
       } catch (_error) {
         return false;
       }
     }
 
-    function boot(graph, summaries = {}, models = {}) {
+    function boot(graph, summaries = {}, models = {}, status = {}) {
       assertValidGraph(graph);
       summaryIndex = summaries?.summaries || {};
       refinedModels = models?.models || {};
+      workflowStatus = status || {};
       currentGraph = graph;
       render(graph);
       refreshSummaries();
@@ -1817,7 +1890,7 @@
     }
 
     if (window.__AKSI_ARCHITECTURE__) {
-      boot(window.__AKSI_ARCHITECTURE__, window.__AKSI_SUMMARIES__ || {}, window.__AKSI_MODELS__ || {});
+      boot(window.__AKSI_ARCHITECTURE__, window.__AKSI_SUMMARIES__ || {}, window.__AKSI_MODELS__ || {}, window.__AKSI_STATUS__ || {});
     } else {
       fetch("../Files/architecture.json", { cache: "no-store" })
         .then(async response => {

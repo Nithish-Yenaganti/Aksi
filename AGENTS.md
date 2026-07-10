@@ -2,7 +2,7 @@
 
 ## Purpose
 
-Aksi turns a local repository into a generated visual map for coding agents and humans.
+Aksi gives MCP hosts a status-driven workflow for keeping repository understanding fresh, grounded, and visually inspectable.
 
 Aksi owns local facts: files, folders, symbols, imports, dependency edges, stale state, unused-code hints, and local Architecture/Runtime candidates. Unused-code hints are review signals, not proof of dead code. Do not ask an LLM to replace local facts.
 
@@ -10,9 +10,11 @@ The host LLM owns language work: summaries, explanations, and final refined Arch
 
 The viewer is a static inspection surface with search, filtering, and export affordances. Do not add or depend on an in-viewer chat feature; agents interact through MCP.
 
+Do not treat Aksi as a generic graph query engine. The graph exists to support summary freshness, model refinement, and viewer release gating.
+
 ## Required MCP Flow
 
-When a user asks to visualize, refresh, inspect, or explain a project through Aksi MCP:
+When a user asks to understand, refresh, visualize, inspect, or explain a project through Aksi MCP:
 
 1. Call `get_digest(path)` first for a fast repo/status/next-step overview.
 2. Call `generate_visualization(path, prepare_summary_targets=True, response_mode="compact")`.
@@ -22,11 +24,17 @@ When a user asks to visualize, refresh, inspect, or explain a project through Ak
 If `next_action` is `summarize_batch`:
 
 1. Use `recommended_batch.node_ids` as the executable queue.
-2. Fetch context with `get_summary_context_bundle(path, limit=...)` or `get_context_batch(path=path, limit=...)`.
+2. Fetch context with `get_context_batch(node_ids=recommended_batch.node_ids, path=path)`.
 3. Write summaries only from the returned context.
 4. Verify every summary matches the node name, node type, path, source, symbols, edges, neighbors, dependencies, and context limits.
 5. Save verified summaries with `save_summaries(items, path)`.
 6. Call `get_workflow_status(path, response_mode="compact")` again.
+
+If `next_action` is `refresh_graph`:
+
+1. Call `generate_visualization(path, prepare_summary_targets=True, response_mode="compact")`.
+2. Call `get_workflow_status(path, response_mode="compact")` again.
+3. Do not summarize or refine models against the stale saved graph.
 
 If `next_action` is `refine_models`:
 
@@ -41,13 +49,14 @@ If `next_action` is `release_viewer`:
 1. Give the user `viewer.viewer_http_url` when present.
 2. Otherwise give `viewer.viewer_url`.
 
-Do not stop at `viewer_file`. A generated `Files/index.html` means the graph exists; it does not mean summaries and refined models are complete.
+Do not stop at a generated viewer artifact. A generated `Files/index.html` means the graph exists; it does not mean summaries and refined models are complete.
 
 ## Completion Contract
 
 The whole MCP workflow is complete only when:
 
 - summary work is complete, or summaries were explicitly disabled by the user;
+- the saved graph is current with files on disk;
 - `model_refinement.complete` is `true`;
 - `get_workflow_status(...).next_action` is `release_viewer`.
 
@@ -103,6 +112,8 @@ Do not copy summaries between nodes. Use low confidence when context is partial.
 `get_model_seed` should include enough compact local evidence for refinement: component candidates, entrypoints, dependency clusters, stale/refinement status, representative nodes, imports, and summary availability.
 
 Saved refined models include a source graph hash. If the graph changes, `model_refinement.stale_models` marks saved models stale and the host must refresh them.
+
+Every refined model node must include at least one grounded explanatory field such as `purpose`, `summary`, `behavior`, or `detail`, plus `confidence` and non-empty `evidence_node_ids` that reference current graph node IDs.
 
 ## Tool Surface
 

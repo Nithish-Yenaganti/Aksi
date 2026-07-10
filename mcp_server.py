@@ -119,16 +119,44 @@ def _script_json(payload: Any) -> str:
     return json.dumps(payload).replace("</", "<\\/")
 
 
+def _viewer_status_payload(repo: Path, architecture: dict[str, Any]) -> dict[str, Any]:
+    stale_files = int(architecture.get("scanner", {}).get("stale_files") or 0)
+    summary_targets = _summary_targets(repo, architecture)
+    summary_worklist = _summary_worklist(summary_targets)
+    summary_status = _summary_status(summary_targets, summary_worklist)
+    model_refinement = _model_refinement_status(repo, architecture)
+    summaries_complete = not summary_worklist
+    models_complete = bool(model_refinement["complete"])
+    releasable = stale_files == 0 and summaries_complete and models_complete
+    return {
+        "summary": {
+            "complete": summaries_complete,
+            "remaining": len(summary_worklist),
+            "missing": sum(1 for item in summary_worklist if item.get("summary_status") == "missing"),
+            "stale": sum(1 for item in summary_worklist if item.get("summary_status") == "stale"),
+            "target_counts": summary_status,
+        },
+        "model_refinement": model_refinement,
+        "viewer": {
+            "releasable": releasable,
+            "withheld": not releasable,
+            "stale_files": stale_files,
+        },
+    }
+
+
 def _write_static_viewer(repo: Path, architecture: dict[str, Any]) -> Path:
     ui_source = _viewer_template_path().read_text(encoding="utf-8")
     summaries = _read_json(_summary_index_path(repo), {"summaries": {}})
     models = _read_json(_models_path(repo), {"models": {}})
+    status = _viewer_status_payload(repo, architecture)
     marker = "  <script>\n    const svg = d3.select"
     embedded = (
         "  <script>\n"
         f"    window.__AKSI_ARCHITECTURE__ = {_script_json(architecture)};\n"
         f"    window.__AKSI_SUMMARIES__ = {_script_json(summaries)};\n"
         f"    window.__AKSI_MODELS__ = {_script_json(models)};\n"
+        f"    window.__AKSI_STATUS__ = {_script_json(status)};\n"
         "  </script>\n"
     )
     if marker not in ui_source:
@@ -490,7 +518,7 @@ def _architecture_fingerprint(architecture: dict[str, Any]) -> str:
     return hashlib.sha256(encoded).hexdigest()
 
 
-def _validate_refined_model(model: Any, model_type: str) -> dict[str, Any]:
+def _validate_refined_model(model: Any, model_type: str, valid_evidence_node_ids: set[str]) -> dict[str, Any]:
     if not isinstance(model, dict):
         raise TypeError("model must be a JSON object")
     nodes = model.get("nodes")
@@ -506,7 +534,23 @@ def _validate_refined_model(model: Any, model_type: str) -> dict[str, Any]:
         if not isinstance(node, dict):
             raise ValueError("each model node must be an object")
         node_id = str(node.get("id") or f"{model_type}:{index}")
+        if node_id in node_ids:
+            raise ValueError(f"duplicate model node id: {node_id}")
         name = str(node.get("name") or node_id)
+        if not any(str(node.get(field) or "").strip() for field in ("purpose", "summary", "behavior", "detail")):
+            raise ValueError("each model node must include one of purpose, summary, behavior, or detail")
+        if not str(node.get("confidence") or "").strip():
+            raise ValueError("each model node must include confidence")
+        evidence_node_ids = node.get("evidence_node_ids")
+        if not isinstance(evidence_node_ids, list) or not evidence_node_ids:
+            raise ValueError("each model node must include non-empty evidence_node_ids")
+        invalid_evidence = [
+            evidence_id
+            for evidence_id in evidence_node_ids
+            if not isinstance(evidence_id, str) or not evidence_id.strip() or evidence_id not in valid_evidence_node_ids
+        ]
+        if invalid_evidence:
+            raise ValueError(f"evidence_node_ids must reference existing graph node ids: {invalid_evidence}")
         normalized = {
             **node,
             "id": node_id,
@@ -544,9 +588,34 @@ def _validate_refined_model(model: Any, model_type: str) -> dict[str, Any]:
     }
 
 
+def _saved_model_evidence_valid(model: Any, valid_evidence_node_ids: set[str]) -> bool:
+    if not isinstance(model, dict):
+        return False
+    nodes = model.get("nodes")
+    if not isinstance(nodes, list) or not nodes:
+        return False
+    model_node_ids: set[str] = set()
+    for node in nodes:
+        if not isinstance(node, dict):
+            return False
+        node_id = node.get("id")
+        if not isinstance(node_id, str) or not node_id or node_id in model_node_ids:
+            return False
+        model_node_ids.add(node_id)
+        evidence_node_ids = node.get("evidence_node_ids")
+        if not isinstance(evidence_node_ids, list) or not evidence_node_ids:
+            return False
+        if any(
+            not isinstance(evidence_id, str) or not evidence_id.strip() or evidence_id not in valid_evidence_node_ids
+            for evidence_id in evidence_node_ids
+        ):
+            return False
+    return True
+
+
 def _save_refined_model(repo: Path, model_type: str, model: Any) -> dict[str, Any]:
-    normalized = _validate_refined_model(model, model_type)
     architecture = refresh_stale_flags(load_architecture(repo), repo)
+    normalized = _validate_refined_model(model, model_type, set(architecture.get("nodes", {})))
     normalized["source_graph_hash"] = _architecture_fingerprint(architecture)
     payload = _read_models(repo)
     payload["generated_at"] = _utc_now()
@@ -743,8 +812,8 @@ def _summary_completion(worklist: list[dict[str, Any]]) -> dict[str, Any]:
         "viewer_state": "graph_ready_summaries_pending" if remaining else "graph_ready_summaries_current",
         "required_action": required_action if remaining else "No host summary work is currently required.",
         "note": (
-            "The viewer can show the graph before summaries are complete, but rectangle explanations "
-            "only become grounded after save_summaries updates Files/context/index.json."
+            "A local viewer artifact may exist, but it is not releasable until summaries and model "
+            "refinement are complete."
         ),
     }
 
@@ -859,8 +928,13 @@ def _model_refinement_status(repo: Path, architecture: dict[str, Any]) -> dict[s
     runtime_model = models.get("runtime")
     has_architecture = isinstance(architecture_model, dict)
     has_runtime = isinstance(runtime_model, dict)
-    architecture_current = has_architecture and architecture_model.get("source_graph_hash") == source_graph_hash
-    runtime_current = has_runtime and runtime_model.get("source_graph_hash") == source_graph_hash
+    valid_evidence_node_ids = set(architecture.get("nodes", {}))
+    architecture_evidence_valid = _saved_model_evidence_valid(architecture_model, valid_evidence_node_ids)
+    runtime_evidence_valid = _saved_model_evidence_valid(runtime_model, valid_evidence_node_ids)
+    architecture_current = (
+        has_architecture and architecture_evidence_valid and architecture_model.get("source_graph_hash") == source_graph_hash
+    )
+    runtime_current = has_runtime and runtime_evidence_valid and runtime_model.get("source_graph_hash") == source_graph_hash
     return {
         "source": "local_candidates_need_host_refinement",
         "source_graph_hash": source_graph_hash,
@@ -875,6 +949,10 @@ def _model_refinement_status(repo: Path, architecture: dict[str, Any]) -> dict[s
             "architecture": architecture_current,
             "runtime": runtime_current,
         },
+        "valid_evidence": {
+            "architecture": architecture_evidence_valid,
+            "runtime": runtime_evidence_valid,
+        },
         "stale_models": {
             "architecture": has_architecture and not architecture_current,
             "runtime": has_runtime and not runtime_current,
@@ -888,7 +966,7 @@ def _model_refinement_status(repo: Path, architecture: dict[str, Any]) -> dict[s
             "and runtime/input-flow models, then call save_architecture_model and save_runtime_model."
         ),
         "note": (
-            "Structure is the concrete scanned graph. Architecture and Runtime are local static candidates "
+            "Structure is the concrete scanned graph. Architecture and Runtime Flow are local candidates "
             "until current host-refined models are saved."
         ),
     }
@@ -1349,10 +1427,14 @@ def _repo_digest(repo: Path, mode: str = "brief") -> dict[str, Any]:
     summary_worklist = _summary_worklist(summary_targets)
     summary_completion = _summary_completion(summary_worklist)
     model_refinement = _model_refinement_status(repo, architecture)
-    workflow_complete = bool(summary_completion["complete"] and model_refinement["complete"])
-    if not summary_completion["complete"]:
+    stale_files = int(architecture.get("scanner", {}).get("stale_files") or 0)
+    workflow_complete = bool(stale_files == 0 and summary_completion["complete"] and model_refinement["complete"])
+    if stale_files:
+        next_action = "refresh_graph"
+        next_tool = "generate_visualization"
+    elif not summary_completion["complete"]:
         next_action = "summarize_batch"
-        next_tool = "get_summary_context_bundle"
+        next_tool = "get_context_batch"
     elif not model_refinement["complete"]:
         next_action = "refine_models"
         next_tool = "get_model_seed"
@@ -1523,7 +1605,7 @@ def _repo_digest(repo: Path, mode: str = "brief") -> dict[str, Any]:
         if len(next_files_to_inspect) >= inspect_limit:
             break
 
-    return {
+    digest = {
         "path": str(repo),
         "mode": normalized_mode,
         "source": "local_static_digest",
@@ -1540,12 +1622,18 @@ def _repo_digest(repo: Path, mode: str = "brief") -> dict[str, Any]:
         "workflow": {
             "next_action": next_action,
             "next_tool": next_tool,
+            "graph_current": stale_files == 0,
+            "stale_files": stale_files,
             "summary_remaining": len(summary_worklist),
             "models_complete": bool(model_refinement["complete"]),
             "viewer_releasable": workflow_complete,
-            "viewer_file": str(_viewer_path(repo)),
+            "viewer_artifact_generated": _viewer_path(repo).exists(),
             "viewer_url": _viewer_path(repo).as_uri() if workflow_complete else None,
-            "viewer_note": "Viewer URL is withheld until summaries and required model refinement are complete."
+            "viewer_note": (
+                "Viewer URL is withheld until the saved graph is refreshed."
+                if stale_files
+                else "Viewer URL is withheld until summaries and required model refinement are complete."
+            )
             if not workflow_complete
             else "Viewer can be released.",
         },
@@ -1573,6 +1661,9 @@ def _repo_digest(repo: Path, mode: str = "brief") -> dict[str, Any]:
         "stale_files": stale_files[:hint_limit],
         "next_files_to_inspect": next_files_to_inspect,
     }
+    if workflow_complete:
+        digest["workflow"]["viewer_file"] = str(_viewer_path(repo))
+    return digest
 
 
 def _workflow_status(
@@ -1588,6 +1679,7 @@ def _workflow_status(
     summary_counts = _summary_status(summary_targets, summary_worklist)
     summary_completion = _summary_completion(summary_worklist)
     model_refinement = _model_refinement_status(repo, architecture)
+    stale_files = int(architecture.get("scanner", {}).get("stale_files") or 0)
     effective_limit = COMPACT_BATCH_LIMIT if mode == "compact" and limit is None else limit
     selected_ids, batch_limits = _limited_node_ids(None, summary_worklist, effective_limit)
 
@@ -1595,13 +1687,21 @@ def _workflow_status(
     worklist_stale = sum(1 for item in summary_worklist if item.get("summary_status") == "stale")
     summaries_complete = bool(summary_completion["complete"])
     models_complete = bool(model_refinement["complete"])
-    releasable = summaries_complete and models_complete
+    graph_current = stale_files == 0
+    releasable = graph_current and summaries_complete and models_complete
 
-    if not summaries_complete:
+    if not graph_current:
+        next_action = "refresh_graph"
+        withheld_reason = f"saved graph is stale; {stale_files} file(s) changed on disk."
+        instructions = [
+            "Call generate_visualization(path=path, prepare_summary_targets=True, response_mode='compact') to refresh the graph.",
+            "Then call get_workflow_status(path=path, response_mode='compact') again.",
+        ]
+    elif not summaries_complete:
         next_action = "summarize_batch"
         withheld_reason = f"summary_worklist has {len(summary_worklist)} remaining items."
         instructions = [
-            "Call get_summary_context_bundle(path=path, limit=limit) for recommended_batch.node_ids.",
+            "Call get_context_batch(node_ids=recommended_batch.node_ids, path=path) for the recommended batch.",
             "Write and verify one grounded summary per returned context.",
             "Call save_summaries(items, path=path) once for the batch.",
             "Call get_workflow_status(path=path, limit=limit) again.",
@@ -1662,13 +1762,13 @@ def _workflow_status(
         },
         "summary_worklist": summary_worklist,
         "recommended_batch": {
-            "tool": "get_summary_context_bundle" if summary_worklist else None,
-            "fallback_tool": "get_context_batch" if summary_worklist else None,
-            "node_ids": selected_ids,
+            "tool": "get_context_batch" if graph_current and summary_worklist else None,
+            "fallback_tool": "get_summary_context_bundle" if graph_current and summary_worklist else None,
+            "node_ids": selected_ids if graph_current else [],
             "limit": batch_limits["limit"],
-            "remaining_after_limit": batch_limits["remaining_after_limit"],
-            "truncated": batch_limits["truncated"],
-            "call": "get_summary_context_bundle(path=path, limit=limit)" if summary_worklist else None,
+            "remaining_after_limit": batch_limits["remaining_after_limit"] if graph_current else len(summary_worklist),
+            "truncated": batch_limits["truncated"] if graph_current else False,
+            "call": "get_context_batch(node_ids=recommended_batch.node_ids, path=path)" if graph_current and summary_worklist else None,
         },
         "model": {
             "complete": models_complete,
@@ -1681,6 +1781,13 @@ def _workflow_status(
             "seed_tool": "get_model_seed" if not models_complete else None,
         },
         "viewer": viewer_status,
+        "graph": {
+            "current": graph_current,
+            "stale_files": stale_files,
+            "required_action": None
+            if graph_current
+            else "Refresh the saved graph with generate_visualization before summary or model work.",
+        },
         "instructions": instructions,
     }
     if mode == "compact":
@@ -1738,19 +1845,32 @@ def generate_visualization(
             viewer_http_error = str(error)
     elif not workflow_complete:
         viewer_http_error = "withheld_until_summary_and_model_refinement_complete"
+    release_reason = None
+    if not workflow_complete:
+        missing_reasons = []
+        if should_prepare_summaries and not summaries_ready:
+            missing_reasons.append("summary_worklist")
+        if not model_refinement["complete"]:
+            missing_reasons.append("model_refinement")
+        release_reason = f"{' and '.join(missing_reasons)} must be complete before returning a viewer URL."
     full_result = {
         **result,
         "response_mode": mode,
-        "viewer_file": str(viewer_file),
+        "viewer_artifact_generated": True,
         "viewer_url": viewer_url,
         "viewer_http_url": viewer_http_url,
         "viewer_http_error": viewer_http_error,
         "viewer_release": {
             "complete": workflow_complete,
             "withheld": not workflow_complete,
-            "reason": None
-            if workflow_complete
-            else "summary_worklist and model_refinement must be complete before returning a viewer URL.",
+            "reason": release_reason,
+        },
+        "preview": None
+        if workflow_complete
+        else {
+            "not_final": True,
+            "viewer_file_available": True,
+            "reason": "Generated local viewer artifact is not releasable until the workflow is complete.",
         },
         "summary_index_file": str(_summary_index_path(repo)),
         "summary_targets": summary_targets,
@@ -1790,8 +1910,8 @@ def generate_visualization(
             "Call get_map(path) and get_context(node_id, path) for repo root and important files/components.",
             "Host LLM may refine labels and grouping only from grounded get_map/get_context evidence.",
             "Host LLM should call get_model_seed(path) first for compact local Architecture/Runtime candidates.",
-            "Host LLM calls save_architecture_model(model, path) for an optional grounded architecture model.",
-            "Host LLM calls save_runtime_model(model, path) for an optional grounded runtime/input-flow model.",
+            "Host LLM calls save_architecture_model(model, path) when architecture_required is true.",
+            "Host LLM calls save_runtime_model(model, path) when runtime_required is true.",
             "Refined models do not clear summary_worklist; only save_summaries clears summary work.",
             "Mark uncertainty and do not add unsupported components, flows, callers, dependencies, or runtime behavior.",
             "Aksi regenerates Files/index.html and the viewer prefers saved host-refined models.",
@@ -1810,6 +1930,7 @@ def generate_visualization(
                     "change_risk": "low, medium, or high",
                     "open_questions": "what future agents should verify",
                     "confidence": "high, medium, or low",
+                    "evidence_node_ids": ["source graph node ids used as evidence"],
                 }
             ],
             "edges": [{"source": "node id", "target": "node id", "label": "relationship"}],
@@ -1819,31 +1940,33 @@ def generate_visualization(
             "Treat summary_worklist as the executable queue; do not iterate summary_targets directly for required work.",
             "If summary_completion.required is true, call get_context_batch or get_summary_context_bundle for summary_worklist items and write grounded host-LLM summaries.",
             "Verify each summary matches the exact get_context node, path, type, source, edges, neighbors, and context limits; re-summarize mismatches before saving.",
-            "Call save_summaries for verified explanations, then re-check completion with get_summary_worklist or generate_visualization.",
+            "Call save_summaries for verified explanations, then re-check completion with get_workflow_status(path, response_mode='compact').",
             "Only say saved rectangle summaries are current when summary_mode is host_llm_worklist and refreshed summary_completion.complete is true.",
             "If summary_mode is disabled, say the graph is ready without summary targets.",
             "After summaries are current, inspect model_refinement; if architecture_required or runtime_required is true, call get_model_seed, then write grounded refined models from seed/map/context evidence.",
-            "viewer_http_url and viewer_url are withheld until summaries and required model refinement are complete; do not stop at viewer_file.",
-            "Use save_architecture_model and save_runtime_model only for optional grounded refinements; they do not clear summary_worklist.",
+            "viewer_http_url and viewer_url are withheld until summaries and required model refinement are complete; do not stop at generated viewer artifacts.",
+            "Use save_architecture_model and save_runtime_model for required grounded refinements; they do not clear summary_worklist.",
         ],
     }
+    if workflow_complete:
+        full_result["viewer_file"] = str(viewer_file)
     if mode == "compact":
         workflow = _workflow_status(
             repo,
             prepare_summary_targets=should_prepare_summaries,
             response_mode="compact",
         )
-        return {
+        compact_result = {
             "path": str(repo),
             "response_mode": mode,
             "summary": result["summary"],
             "architecture_file": result["architecture_file"],
-            "viewer_file": str(viewer_file),
             "summary_index_file": str(_summary_index_path(repo)),
             "viewer_url": viewer_url,
             "viewer_http_url": viewer_http_url,
             "viewer_http_error": viewer_http_error,
             "viewer_release": full_result["viewer_release"],
+            "viewer_artifact_generated": True,
             "summary_mode": full_result["summary_mode"],
             "summary_status": summary_status,
             "summary_completion": summary_completion,
@@ -1862,6 +1985,15 @@ def generate_visualization(
                 "next_steps": True,
             },
         }
+        if workflow_complete:
+            compact_result["viewer_file"] = str(viewer_file)
+        else:
+            compact_result["preview"] = {
+                "not_final": True,
+                "viewer_file_available": True,
+                "reason": "Generated graph preview exists, but summaries and model refinement must complete before release.",
+            }
+        return compact_result
     return full_result
 
 
