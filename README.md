@@ -10,6 +10,55 @@ Aksi scans code locally, tracks what changed, prepares exact context worklists f
 
 Aksi is not a general knowledge graph, graph database, arbitrary repo query engine, or universal artifact indexer. It focuses on one workflow: help an MCP host keep repo understanding fresh, grounded, and visibly complete.
 
+## Install For MCP
+
+**Current setup: install from this repository.** This guide does not depend on a package named `aksi` being available from a package registry. Requires Python **3.11+**, Git, and a client that supports local MCP servers over stdio.
+
+On macOS or Linux:
+
+```sh
+git clone https://github.com/Nithish-Yenaganti/Aksi.git
+cd Aksi
+scripts/setup_mcp.sh --write-config .mcp/aksi.json
+cat .mcp/aksi.json
+```
+
+The script creates a local `.venv`, installs the server dependencies, and writes an MCP configuration snippet containing absolute paths to this checkout. Merge that snippet into your client's MCP configuration and restart the client. Keep the checkout in a stable location. This command does not change your client's settings itself.
+
+The optional `scripts/setup_mcp.sh --claude-desktop` command directly updates Claude Desktop's macOS configuration. Keep a copy of an existing configuration before using that option.
+
+### First successful call
+
+Ask the connected MCP client to call `get_digest` with the absolute path of a small repository:
+
+```json
+{
+  "path": "/absolute/path/to/your/repository"
+}
+```
+
+Expect a structured repository/context status response. For a complete visualization, follow the [agent workflow](#agent-workflow) until `next_action` is `release_viewer`. A generated HTML file alone does not mean the workflow is complete.
+
+The client launches the server; there is no standalone web dashboard to start manually. The final viewer URL comes from the completed MCP workflow.
+
+### Editable package for development
+
+```sh
+python3 -m venv .venv
+. .venv/bin/activate
+python -m pip install -e ".[dev]"
+```
+
+This installs the `aksi-mcp` entry point into `.venv/bin`. If configuring it manually, use that executable's absolute path so the client can find it outside your shell.
+
+Optional multi-language grammar bundle:
+
+```sh
+python -m pip install -e ".[multilang]"
+```
+
+Python parsing has a dedicated grammar dependency. The optional bundle has Python-version constraints; do not assume every language has equally complete parsing support.
+
 ## The Problem
 
 AI coding agents often stop at a partial repo scan and act as if they understand the project. That creates stale summaries, missed dependencies, weak architecture guesses, and premature "done" responses.
@@ -43,7 +92,7 @@ Aksi is built around a completion contract:
 - Provides `get_digest()` as a fast first call for agents.
 - Provides `get_model_seed()` so the host LLM can refine Architecture and Runtime models from grounded evidence.
 
-Aksi does **not** call an LLM and does **not** upload code. The host LLM writes summaries and refined models using context returned by Aksi.
+Aksi does **not** call an LLM or upload code itself. The host LLM writes summaries and refined models using context returned by Aksi. A cloud-backed host may send that context to its model provider; local scanning alone does not make the entire host workflow offline.
 
 Unused-code markers are conservative static-analysis hints, not proof that code can be deleted.
 
@@ -59,56 +108,6 @@ Local repo
 ```
 
 Aksi does the local mapping and memory work. The host LLM does the language and judgment work.
-
-## Install For MCP
-
-Aksi is meant to be launched by an MCP client, not run manually as a daily tool.
-
-After publishing, install it as a local MCP server:
-
-```bash
-pipx install aksi
-```
-
-or:
-
-```bash
-uv tool install aksi
-```
-
-During local development, install from this checkout:
-
-```bash
-python -m venv .venv
-. .venv/bin/activate
-pip install -e ".[dev]"
-```
-
-Optional multi-language grammar bundle:
-
-```bash
-pip install -e ".[multilang]"
-```
-
-## MCP Setup
-
-MCP clients should launch:
-
-```text
-command: aksi-mcp
-```
-
-For local development before publishing, generate a config snippet from this checkout:
-
-```bash
-scripts/setup_mcp.sh --write-config .mcp/aksi.json
-```
-
-For Claude Desktop on macOS during local development:
-
-```bash
-scripts/setup_mcp.sh --claude-desktop
-```
 
 ## Agent Workflow
 
@@ -188,7 +187,7 @@ Use `response_mode="compact"` for normal agent loops. Use full responses only wh
 
 The recommended distribution is a Python package, not a hosted scanner. Aksi needs direct filesystem access to the user's repository, so the MCP server should run beside the codebase.
 
-Recommended install shape is `pipx install aksi` or `uv tool install aksi`, then configure the MCP client to launch `aksi-mcp`.
+Use the source setup above today. A future registry release can support `pipx` or `uv tool` installation; document and verify the published package name and version before recommending it.
 
 For a cloud product, use a hybrid model:
 
@@ -211,3 +210,7 @@ Packaging notes:
 - `pyproject.toml` exposes `aksi-mcp` as the user-facing command.
 - The viewer template is packaged as `share/aksi/ui/index.html`.
 - `mcp_server.py` can load the viewer from either a repo checkout or installed package data.
+
+## Contributing
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for local checks and bug-report guidance. The repository's [agent instructions](AGENTS.md) describe the completion contract and model-grounding requirements.
